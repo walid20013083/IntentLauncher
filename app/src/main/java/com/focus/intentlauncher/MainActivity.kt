@@ -797,8 +797,8 @@ fun getTodayUsageMinutes(context: Context): Map<String, Int> {
         set(Calendar.MINUTE, 0)
         set(Calendar.SECOND, 0)
     }
-    val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, calendar.timeInMillis, System.currentTimeMillis())
-    return stats.associate { it.packageName to (it.totalTimeInForeground / 60000).toInt() }
+    val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, calendar.timeInMillis, System.currentTimeMillis()) ?: return emptyMap()
+    return stats.associate { stat -> stat.packageName to (stat.totalTimeInForeground / 60000).toInt() }
 }
 
 fun getPast7DayAverageMinutes(context: Context): Int {
@@ -806,7 +806,7 @@ fun getPast7DayAverageMinutes(context: Context): Int {
     val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     val end = System.currentTimeMillis()
     val start = end - (7L * 24 * 60 * 60 * 1000)
-    val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
-    val totalMinutes = stats.sumOf { (it.totalTimeInForeground / 60000).toInt() }
+    val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end) ?: return 0
+    val totalMinutes = stats.sumOf { stat -> (stat.totalTimeInForeground / 60000).toInt() }
     return totalMinutes / 7
 }
