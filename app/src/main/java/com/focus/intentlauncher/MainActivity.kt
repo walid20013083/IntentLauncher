@@ -18,7 +18,21 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Typography
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,20 +50,16 @@ import androidx.compose.ui.window.Dialog
 import kotlinx.coroutines.delay
 import java.util.*
 
-// --- DATA MODELS & ENUMS ---
-
 enum class AppTier { GREEN, YELLOW, RED }
 
 data class AppItem(
     val packageName: String,
     val label: String,
     var tier: AppTier = AppTier.GREEN,
-    var dailyQuotaMinutes: Int = 0, // 0 = disabled (optional)
+    var dailyQuotaMinutes: Int = 0,
     var usedMinutesToday: Int = 0,
     var cooldownUntilMillis: Long = 0L
 )
-
-// --- LOCALIZATION & RTL SUPPORT ---
 
 data class Strings(
     val searchPlaceholder: String,
@@ -117,8 +127,6 @@ val ArabicStrings = Strings(
     beforeAfterComparison = "المعدل السابق مقابل اليوم:"
 )
 
-// --- MAIN LAUNCHER ACTIVITY ---
-
 class MainActivity : ComponentActivity() {
     private lateinit var prefs: SharedPreferences
     private lateinit var appWidgetManager: AppWidgetManager
@@ -149,8 +157,6 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-// --- SLEEK MONOCHROME THEME ---
-
 @Composable
 fun MinimalLauncherTheme(content: @Composable () -> Unit) {
     val darkColorScheme = darkColorScheme(
@@ -180,9 +186,6 @@ fun MinimalLauncherTheme(content: @Composable () -> Unit) {
     )
 }
 
-// --- MAIN UI & STATE MANAGEMENT ---
-
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun LauncherScreen(
     context: Context,
@@ -196,19 +199,15 @@ fun LauncherScreen(
 
     val focusManager = LocalFocusManager.current
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
-    val scope = rememberCoroutineScope()
 
-    // App configurations
     var preSessionDelaySec by remember { mutableStateOf(prefs.getInt("delay_sec", 4)) }
     var redCooldownMin by remember { mutableStateOf(prefs.getInt("cooldown_min", 15)) }
     var focusModeEnabled by remember { mutableStateOf(prefs.getBoolean("focus_mode", false)) }
     var widgetsEnabled by remember { mutableStateOf(prefs.getBoolean("widgets_enabled", false)) }
     var activeWidgetId by remember { mutableStateOf(prefs.getInt("active_widget_id", -1)) }
 
-    // Search (non-auto-focusing)
     var searchQuery by remember { mutableStateOf("") }
 
-    // Load installed apps + UsageStats
     val apps = remember { mutableStateListOf<AppItem>() }
     LaunchedEffect(Unit) {
         val pm = context.packageManager
@@ -233,12 +232,10 @@ fun LauncherScreen(
         apps.sortBy { it.label.lowercase(Locale.getDefault()) }
     }
 
-    // Active Session & Gate States
     var selectedAppForPrompt by remember { mutableStateOf<AppItem?>(null) }
     var activeSessionApp by remember { mutableStateOf<AppItem?>(null) }
     var sessionRemainingSeconds by remember { mutableStateOf(0) }
 
-    // Background timer for active Yellow/Red sessions
     LaunchedEffect(activeSessionApp, sessionRemainingSeconds) {
         if (activeSessionApp != null && sessionRemainingSeconds > 0) {
             delay(1000L)
@@ -251,7 +248,6 @@ fun LauncherScreen(
                     prefs.edit().putLong("cooldown_${expiredApp.packageName}", cooldownUntil).apply()
                 }
                 activeSessionApp = null
-                // Bring launcher to front to close/suspend the Red/Yellow app
                 val homeIntent = Intent(context, MainActivity::class.java).apply {
                     flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                 }
@@ -306,7 +302,6 @@ fun LauncherScreen(
                     }
                     .padding(horizontal = 24.dp, vertical = 36.dp)
             ) {
-                // Header: Minimalist Clock & Active Session Indicator
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
@@ -328,7 +323,6 @@ fun LauncherScreen(
 
                 Spacer(modifier = Modifier.height(16.dp))
 
-                // Optional Home Screen Widget Area
                 if (widgetsEnabled && activeWidgetId != -1) {
                     Box(
                         modifier = Modifier
@@ -348,7 +342,6 @@ fun LauncherScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                 }
 
-                // Non-Auto-Focusing Minimal Search Bar
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
@@ -364,7 +357,6 @@ fun LauncherScreen(
 
                 Spacer(modifier = Modifier.height(20.dp))
 
-                // Filtered App List
                 val filteredApps = apps.filter {
                     it.label.contains(searchQuery, ignoreCase = true)
                 }
@@ -390,7 +382,6 @@ fun LauncherScreen(
                 }
             }
 
-            // Pre-Session Delay + Intention & Slider Timer Dialog for Yellow/Red Apps
             if (selectedAppForPrompt != null) {
                 IntentionAndTimerDialog(
                     app = selectedAppForPrompt!!,
@@ -409,8 +400,6 @@ fun LauncherScreen(
         }
     }
 }
-
-// --- APP ITEM ROW ---
 
 @Composable
 fun AppRow(app: AppItem, strings: Strings, onClick: () -> Unit) {
@@ -477,8 +466,6 @@ fun AppRow(app: AppItem, strings: Strings, onClick: () -> Unit) {
     }
 }
 
-// --- INTENTION, DELAY & SLIDER TIMER DIALOG ---
-
 @Composable
 fun IntentionAndTimerDialog(
     app: AppItem,
@@ -512,4 +499,11 @@ fun IntentionAndTimerDialog(
             if (remainingDelay > 0) {
                 Text(
                     text = "${strings.preSessionDelayText} ${remainingDelay}s...",
-                  
+                    fontSize = 14.sp,
+                    color = Color.Gray
+                )
+            } else {
+                OutlinedTextField(
+                    value = intentionText,
+                    onValueChange = { intentionText = it },
+             
