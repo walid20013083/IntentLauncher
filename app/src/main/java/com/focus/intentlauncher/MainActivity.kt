@@ -1,429 +1,515 @@
-package com.focus.intentlauncher
+package com.minimal.regulatedlauncher
 
-import android.app.Activity
-import android.app.AlertDialog
+import android.app.AppOpsManager
+import android.app.usage.UsageStatsManager
+import android.appwidget.AppWidgetHost
+import android.appwidget.AppWidgetManager
 import android.content.Context
 import android.content.Intent
 import android.content.SharedPreferences
-import android.graphics.Color
-import android.graphics.PixelFormat
-import android.graphics.Typeface
-import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.CountDownTimer
-import android.provider.Settings
-import android.text.Editable
-import android.text.TextWatcher
-import android.view.Gravity
-import android.view.View
-import android.view.WindowManager
-import android.view.inputmethod.EditorInfo
-import android.widget.*
+import android.os.Process
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.LayoutDirection
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import kotlinx.coroutines.delay
+import java.util.*
 
-class MainActivity : Activity() {
+// --- DATA MODELS & ENUMS ---
 
+enum class AppTier { GREEN, YELLOW, RED }
+
+data class AppItem(
+    val packageName: String,
+    val label: String,
+    var tier: AppTier = AppTier.GREEN,
+    var dailyQuotaMinutes: Int = 0, // 0 = disabled (optional)
+    var usedMinutesToday: Int = 0,
+    var cooldownUntilMillis: Long = 0L
+)
+
+// --- LOCALIZATION & RTL SUPPORT ---
+
+data class Strings(
+    val searchPlaceholder: String,
+    val settingsTitle: String,
+    val intentionPrompt: String,
+    val preSessionDelayText: String,
+    val selectDuration: String,
+    val startSession: String,
+    val cancel: String,
+    val quotaReached: String,
+    val inCooldown: String,
+    val focusMode: String,
+    val usageHistory: String,
+    val endOfDayReport: String,
+    val gatePrompt: String,
+    val unlockSettings: String,
+    val cooldownSetting: String,
+    val delaySetting: String,
+    val enableWidgets: String,
+    val languageToggle: String,
+    val beforeAfterComparison: String
+)
+
+val EnglishStrings = Strings(
+    searchPlaceholder = "Search apps...",
+    settingsTitle = "Settings & Regulation",
+    intentionPrompt = "State your intention for opening this app:",
+    preSessionDelayText = "Take a breath. Starting in",
+    selectDuration = "Session duration (minutes):",
+    startSession = "Begin Session",
+    cancel = "Cancel",
+    quotaReached = "Daily quota reached. Locked until tomorrow.",
+    inCooldown = "App suspended. Cooldown active:",
+    focusMode = "Focus Mode (Silence Notifications)",
+    usageHistory = "Before & After Usage Impact",
+    endOfDayReport = "End-of-Day Report",
+    gatePrompt = "Hold or wait to unlock critical settings...",
+    unlockSettings = "Unlock Settings (5s delay)",
+    cooldownSetting = "Red Tier Cooldown (min):",
+    delaySetting = "Pre-session Delay (sec):",
+    enableWidgets = "Show Home Screen Widget",
+    languageToggle = "العربية (Arabic)",
+    beforeAfterComparison = "Past Avg vs Today:"
+)
+
+val ArabicStrings = Strings(
+    searchPlaceholder = "ابحث عن التطبيقات...",
+    settingsTitle = "الإعدادات والتنظيم",
+    intentionPrompt = "حدد نيتك لفتح هذا التطبيق:",
+    preSessionDelayText = "خذ نفساً عميقاً. يبدأ خلال",
+    selectDuration = "مدة الجلسة (بالدقائق):",
+    startSession = "ابدأ الجلسة",
+    cancel = "إلغاء",
+    quotaReached = "تم استنفاد الحصة اليومية. مغلق حتى الغد.",
+    inCooldown = "التطبيق معلق. فترة التهدئة نشطة:",
+    focusMode = "وضع التركيز (كتم الإشعارات)",
+    usageHistory = "مقارنة الاستخدام (قبل وبعد)",
+    endOfDayReport = "تقرير نهاية اليوم",
+    gatePrompt = "انتظر لفتح الإعدادات الحساسة...",
+    unlockSettings = "فتح الإعدادات (تأخير 5 ثوانٍ)",
+    cooldownSetting = "فترة التهدئة للفئة الحمراء (دقيقة):",
+    delaySetting = "تأخير ما قبل الجلسة (ثانية):",
+    enableWidgets = "إظهار الويدجت على الشاشة",
+    languageToggle = "English (الإنجليزية)",
+    beforeAfterComparison = "المعدل السابق مقابل اليوم:"
+)
+
+// --- MAIN LAUNCHER ACTIVITY ---
+
+class MainActivity : ComponentActivity() {
     private lateinit var prefs: SharedPreferences
-    private lateinit var mainColumn: LinearLayout
-    private lateinit var appsContainer: LinearLayout
-    private lateinit var thoughtsContainer: LinearLayout
-    private lateinit var searchInput: EditText
-    private lateinit var modeBtn: Button
-
-    private var windowManager: WindowManager? = null
-    private var pillView: TextView? = null
-    private var blockerView: LinearLayout? = null
-    private var activeTimer: CountDownTimer? = null
-
-    data class AppEntry(val label: String, val pkg: String)
-    private var installedApps = listOf<AppEntry>()
+    private lateinit var appWidgetManager: AppWidgetManager
+    private lateinit var appWidgetHost: AppWidgetHost
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        prefs = getSharedPreferences("intent_launcher_prefs", Context.MODE_PRIVATE)
-        windowManager = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+        prefs = getSharedPreferences("regulated_launcher_prefs", Context.MODE_PRIVATE)
+        appWidgetManager = AppWidgetManager.getInstance(this)
+        appWidgetHost = AppWidgetHost(this, 1024)
+        appWidgetHost.startListening()
 
-        loadApps()
-        buildHomeUi()
-        checkOverlayPermission()
-    }
-
-    override fun onResume() {
-        super.onResume()
-        if (::searchInput.isInitialized) {
-            searchInput.setText("")
-            refreshAppList("")
+        setContent {
+            MinimalLauncherTheme {
+                LauncherScreen(
+                    context = this,
+                    prefs = prefs,
+                    appWidgetManager = appWidgetManager,
+                    appWidgetHost = appWidgetHost
+                )
+            }
         }
     }
 
-    private fun dp(value: Int): Int = (value * resources.displayMetrics.density).toInt()
-
-    private fun checkOverlayPermission() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
-            Toast.makeText(this, "Enable 'Appear on top' for the sticky timer & blocker", Toast.LENGTH_LONG).show()
-            startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
-        }
+    override fun onDestroy() {
+        super.onDestroy()
+        appWidgetHost.stopListening()
     }
+}
 
-    private fun loadApps() {
-        val pm = packageManager
-        val intent = Intent(Intent.ACTION_MAIN, null).apply { addCategory(Intent.CATEGORY_LAUNCHER) }
-        installedApps = pm.queryIntentActivities(intent, 0)
-            .map { AppEntry(it.loadLabel(pm).toString(), it.activityInfo.packageName) }
-            .filter { it.pkg != packageName }
-            .distinctBy { it.pkg }
-            .sortedBy { it.label.lowercase() }
-    }
+// --- SLEEK MONOCHROME THEME ---
 
-    private fun buildHomeUi() {
-        val rootScroll = ScrollView(this).apply {
-            setBackgroundColor(Color.BLACK)
-            isFillViewport = true
-        }
-
-        val outerWrapper = FrameLayout(this).apply {
-            setPadding(dp(24), dp(48), dp(24), dp(48))
-        }
-
-        // Centered container (max 520dp so it looks clean on both phone and tablet)
-        mainColumn = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            layoutParams = FrameLayout.LayoutParams(
-                dp(520).coerceAtMost(resources.displayMetrics.widthPixels - dp(48)),
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                Gravity.TOP or Gravity.CENTER_HORIZONTAL
+@Composable
+fun MinimalLauncherTheme(content: @Composable () -> Unit) {
+    val darkColorScheme = darkColorScheme(
+        primary = Color.White,
+        onPrimary = Color.Black,
+        background = Color(0xFF0A0A0A),
+        onBackground = Color(0xFFEAEAEA),
+        surface = Color(0xFF141414),
+        onSurface = Color(0xFFEAEAEA)
+    )
+    MaterialTheme(
+        colorScheme = darkColorScheme,
+        typography = Typography(
+            bodyLarge = androidx.compose.ui.text.TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontSize = 16.sp,
+                color = Color(0xFFEAEAEA)
+            ),
+            titleLarge = androidx.compose.ui.text.TextStyle(
+                fontFamily = FontFamily.Monospace,
+                fontWeight = FontWeight.Light,
+                fontSize = 22.sp,
+                color = Color.White
             )
-        }
+        ),
+        content = content
+    )
+}
 
-        // Header Prompt
-        val title = TextView(this).apply {
-            text = "What is your intention right now?"
-            textSize = 22f
-            setTextColor(Color.WHITE)
-            typeface = Typeface.MONOSPACE
-            setPadding(0, 0, 0, dp(20))
-        }
-        mainColumn.addView(title)
+// --- MAIN UI & STATE MANAGEMENT ---
 
-        // 1. Brain Dump / Intrusive Thought Parking Lot
-        val thoughtInput = EditText(this).apply {
-            hint = "Park an intrusive thought here & press Enter..."
-            setHintTextColor(Color.DKGRAY)
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#121212"))
-            setPadding(dp(14), dp(14), dp(14), dp(14))
-            isSingleLine = true
-            imeOptions = EditorInfo.IME_ACTION_DONE
-            setOnEditorActionListener { v, actionId, _ ->
-                if (actionId == EditorInfo.IME_ACTION_DONE || actionId == EditorInfo.IME_NULL) {
-                    val text = v.text.toString().trim()
-                    if (text.isNotEmpty()) {
-                        saveThought(text)
-                        v.text = ""
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun LauncherScreen(
+    context: Context,
+    prefs: SharedPreferences,
+    appWidgetManager: AppWidgetManager,
+    appWidgetHost: AppWidgetHost
+) {
+    var isArabic by remember { mutableStateOf(prefs.getBoolean("is_arabic", false)) }
+    val strings = if (isArabic) ArabicStrings else EnglishStrings
+    val layoutDirection = if (isArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
+
+    val focusManager = LocalFocusManager.current
+    val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
+    val scope = rememberCoroutineScope()
+
+    // App configurations
+    var preSessionDelaySec by remember { mutableStateOf(prefs.getInt("delay_sec", 4)) }
+    var redCooldownMin by remember { mutableStateOf(prefs.getInt("cooldown_min", 15)) }
+    var focusModeEnabled by remember { mutableStateOf(prefs.getBoolean("focus_mode", false)) }
+    var widgetsEnabled by remember { mutableStateOf(prefs.getBoolean("widgets_enabled", false)) }
+    var activeWidgetId by remember { mutableStateOf(prefs.getInt("active_widget_id", -1)) }
+
+    // Search (non-auto-focusing)
+    var searchQuery by remember { mutableStateOf("") }
+
+    // Load installed apps + UsageStats
+    val apps = remember { mutableStateListOf<AppItem>() }
+    LaunchedEffect(Unit) {
+        val pm = context.packageManager
+        val intent = Intent(Intent.ACTION_MAIN, null).apply {
+            addCategory(Intent.CATEGORY_LAUNCHER)
+        }
+        val resolveInfos = pm.queryIntentActivities(intent, 0)
+        val usageStats = getTodayUsageMinutes(context)
+
+        apps.clear()
+        resolveInfos.forEach { info ->
+            val pkg = info.activityInfo.packageName
+            if (pkg != context.packageName) {
+                val label = info.loadLabel(pm).toString()
+                val savedTier = AppTier.valueOf(prefs.getString("tier_$pkg", AppTier.GREEN.name)!!)
+                val quota = prefs.getInt("quota_$pkg", 0)
+                val cooldown = prefs.getLong("cooldown_$pkg", 0L)
+                val usedToday = usageStats[pkg] ?: 0
+                apps.add(AppItem(pkg, label, savedTier, quota, usedToday, cooldown))
+            }
+        }
+        apps.sortBy { it.label.lowercase(Locale.getDefault()) }
+    }
+
+    // Active Session & Gate States
+    var selectedAppForPrompt by remember { mutableStateOf<AppItem?>(null) }
+    var activeSessionApp by remember { mutableStateOf<AppItem?>(null) }
+    var sessionRemainingSeconds by remember { mutableStateOf(0) }
+
+    // Background timer for active Yellow/Red sessions
+    LaunchedEffect(activeSessionApp, sessionRemainingSeconds) {
+        if (activeSessionApp != null && sessionRemainingSeconds > 0) {
+            delay(1000L)
+            sessionRemainingSeconds -= 1
+            if (sessionRemainingSeconds == 0) {
+                val expiredApp = activeSessionApp!!
+                if (expiredApp.tier == AppTier.RED) {
+                    val cooldownUntil = System.currentTimeMillis() + (redCooldownMin * 60 * 1000L)
+                    expiredApp.cooldownUntilMillis = cooldownUntil
+                    prefs.edit().putLong("cooldown_${expiredApp.packageName}", cooldownUntil).apply()
+                }
+                activeSessionApp = null
+                // Bring launcher to front to close/suspend the Red/Yellow app
+                val homeIntent = Intent(context, MainActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                }
+                context.startActivity(homeIntent)
+            }
+        }
+    }
+
+    CompositionLocalProvider(LocalLayoutDirection provides layoutDirection) {
+        ModalNavigationDrawer(
+            drawerState = drawerState,
+            drawerContent = {
+                SettingsDrawer(
+                    strings = strings,
+                    apps = apps,
+                    prefs = prefs,
+                    isArabic = isArabic,
+                    onToggleLanguage = {
+                        isArabic = !isArabic
+                        prefs.edit().putBoolean("is_arabic", isArabic).apply()
+                    },
+                    preSessionDelaySec = preSessionDelaySec,
+                    onUpdateDelay = {
+                        preSessionDelaySec = it
+                        prefs.edit().putInt("delay_sec", it).apply()
+                    },
+                    redCooldownMin = redCooldownMin,
+                    onUpdateCooldown = {
+                        redCooldownMin = it
+                        prefs.edit().putInt("cooldown_min", it).apply()
+                    },
+                    focusModeEnabled = focusModeEnabled,
+                    onToggleFocus = {
+                        focusModeEnabled = it
+                        prefs.edit().putBoolean("focus_mode", it).apply()
+                    },
+                    widgetsEnabled = widgetsEnabled,
+                    onToggleWidgets = {
+                        widgetsEnabled = it
+                        prefs.edit().putBoolean("widgets_enabled", it).apply()
+                    },
+                    context = context
+                )
+            }
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MaterialTheme.colorScheme.background)
+                    .clickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) {
+                        focusManager.clearFocus()
                     }
-                    true
-                } else false
-            }
-        }
-        mainColumn.addView(thoughtInput)
-
-        thoughtsContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(0, dp(8), 0, dp(24))
-        }
-        mainColumn.addView(thoughtsContainer)
-        renderThoughts()
-
-        // 2. Mode Toggle Button (Strict Prompt Only vs. Prompt + Harmless Shortcuts)
-        modeBtn = Button(this).apply {
-            setBackgroundColor(Color.parseColor("#1A1A1A"))
-            setTextColor(Color.LTGRAY)
-            textSize = 12f
-            setOnClickListener {
-                val nextMode = !isStrictMode()
-                prefs.edit().putBoolean("strict_mode", nextMode).apply()
-                updateModeButtonText()
-                refreshAppList(searchInput.text.toString())
-            }
-        }
-        updateModeButtonText()
-        mainColumn.addView(modeBtn)
-
-        // 3. Search / Command Bar
-        searchInput = EditText(this).apply {
-            hint = "Type the app you need (Long-press any app to set Green/Yellow)..."
-            setHintTextColor(Color.GRAY)
-            setTextColor(Color.WHITE)
-            setBackgroundColor(Color.parseColor("#181818"))
-            setPadding(dp(14), dp(14), dp(14), dp(14))
-            addTextChangedListener(object : TextWatcher {
-                override fun afterTextChanged(s: Editable?) = refreshAppList(s.toString())
-                override fun beforeTextChanged(s: CharSequence?, start: Int, count: Int, after: Int) {}
-                override fun onTextChanged(s: CharSequence?, start: Int, before: Int, count: Int) {}
-            })
-        }
-        val searchParams = LinearLayout.LayoutParams(
-            LinearLayout.LayoutParams.MATCH_PARENT,
-            LinearLayout.LayoutParams.WRAP_CONTENT
-        ).apply { topMargin = dp(12); bottomMargin = dp(16) }
-        mainColumn.addView(searchInput, searchParams)
-
-        // 4. App List Container
-        appsContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        mainColumn.addView(appsContainer)
-
-        outerWrapper.addView(mainColumn)
-        rootScroll.addView(outerWrapper)
-        setContentView(rootScroll)
-
-        refreshAppList("")
-    }
-
-    private fun isStrictMode(): Boolean = prefs.getBoolean("strict_mode", false)
-
-    private fun updateModeButtonText() {
-        modeBtn.text = if (isStrictMode()) {
-            "MODE: Strict Prompt Only (Tap to show Green shortcuts)"
-        } else {
-            "MODE: Prompt + Green Shortcuts (Tap for Strict Mode)"
-        }
-    }
-
-    private fun isGreenApp(pkg: String): Boolean {
-        val greens = prefs.getStringSet("green_apps", setOf()) ?: setOf()
-        return greens.contains(pkg)
-    }
-
-    private fun toggleGreenApp(pkg: String, label: String) {
-        val greens = (prefs.getStringSet("green_apps", setOf()) ?: setOf()).toMutableSet()
-        if (greens.contains(pkg)) {
-            greens.remove(pkg)
-            Toast.makeText(this, "$label set to YELLOW (Requires Justification)", Toast.LENGTH_SHORT).show()
-        } else {
-            greens.add(pkg)
-            Toast.makeText(this, "$label set to GREEN (Harmless / Instant)", Toast.LENGTH_SHORT).show()
-        }
-        prefs.edit().putStringSet("green_apps", greens).apply()
-        refreshAppList(searchInput.text.toString())
-    }
-
-    private fun refreshAppList(query: String) {
-        appsContainer.removeAllViews()
-        val cleanQuery = query.trim().lowercase()
-
-        val listToShow = when {
-            cleanQuery.isNotEmpty() -> installedApps.filter { it.label.lowercase().contains(cleanQuery) }
-            isStrictMode() -> emptyList() // Strict Mode shows NO apps until you type what you want
-            else -> installedApps.filter { isGreenApp(it.pkg) } // Shortcut Mode shows only Green apps
-        }
-
-        if (cleanQuery.isEmpty() && !isStrictMode() && listToShow.isEmpty()) {
-            val emptyHint = TextView(this).apply {
-                text = "No Green apps saved yet. Search any harmless app above and long-press it to pin it here."
-                setTextColor(Color.DKGRAY)
-                textSize = 13f
-            }
-            appsContainer.addView(emptyHint)
-            return
-        }
-
-        for (app in listToShow) {
-            val green = isGreenApp(app.pkg)
-            val row = TextView(this).apply {
-                text = if (green) "● ${app.label}" else "○ ${app.label} [Intent Required]"
-                textSize = 17f
-                typeface = Typeface.MONOSPACE
-                setTextColor(if (green) Color.parseColor("#81C784") else Color.parseColor("#FFB74D"))
-                setPadding(dp(12), dp(14), dp(12), dp(14))
-                setOnClickListener {
-                    if (green) launchPackage(app.pkg) else showIntentGateDialog(app)
-                }
-                setOnLongClickListener {
-                    toggleGreenApp(app.pkg, app.label)
-                    true
-                }
-            }
-            appsContainer.addView(row)
-        }
-    }
-
-    private fun showIntentGateDialog(app: AppEntry) {
-        val box = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(16), dp(20), dp(8))
-        }
-        val reasonField = EditText(this).apply {
-            hint = "Why do you need ${app.label} right now?"
-        }
-        box.addView(reasonField)
-
-        val dialog = AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog_Alert)
-            .setTitle("Unlocking ${app.label}")
-            .setView(box)
-            .setNegativeButton("Cancel (It's a trap)", null)
-            .create()
-
-        val btnRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, dp(12), 0, 0)
-        }
-
-        listOf(2, 5, 15).forEach { mins ->
-            val b = Button(this).apply {
-                text = "${mins}m"
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-                setOnClickListener {
-                    val why = reasonField.text.toString().trim()
-                    if (why.isEmpty()) {
-                        Toast.makeText(context, "Type your reason first.", Toast.LENGTH_SHORT).show()
-                    } else {
-                        dialog.dismiss()
-                        startMonitoredSession(app, why, mins)
+                    .padding(horizontal = 24.dp, vertical = 36.dp)
+            ) {
+                // Header: Minimalist Clock & Active Session Indicator
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        text = java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()),
+                        style = MaterialTheme.typography.titleLarge,
+                        fontSize = 32.sp
+                    )
+                    if (activeSessionApp != null) {
+                        Text(
+                            text = "${activeSessionApp?.label}: ${sessionRemainingSeconds / 60}m ${sessionRemainingSeconds % 60}s",
+                            fontSize = 12.sp,
+                            color = Color(0xFFFF6B6B)
+                        )
                     }
                 }
-            }
-            btnRow.addView(b)
-        }
-        box.addView(btnRow)
-        dialog.show()
-    }
 
-    private fun startMonitoredSession(app: AppEntry, reason: String, minutes: Int) {
-        showStickyTopPill(reason, minutes * 60 * 1000L, app)
-        launchPackage(app.pkg)
-    }
+                Spacer(modifier = Modifier.height(16.dp))
 
-    private fun showStickyTopPill(reason: String, durationMs: Long, app: AppEntry) {
-        clearOverlays()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) return
-
-        val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else WindowManager.LayoutParams.TYPE_PHONE
-
-        pillView = TextView(this).apply {
-            setBackgroundColor(Color.parseColor("#CC111111"))
-            setTextColor(Color.WHITE)
-            textSize = 12f
-            typeface = Typeface.MONOSPACE
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-        }
-
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.WRAP_CONTENT,
-            overlayType,
-            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL,
-            PixelFormat.TRANSLUCENT
-        ).apply { gravity = Gravity.TOP }
-
-        windowManager?.addView(pillView, params)
-
-        activeTimer = object : CountDownTimer(durationMs, 1000) {
-            override fun onTick(left: Long) {
-                val m = (left / 1000) / 60
-                val s = (left / 1000) % 60
-                pillView?.text = "GOAL: $reason  |  ${m}:${if (s < 10) "0$s" else s}"
-            }
-
-            override fun onFinish() {
-                showFullScreenBlocker(reason, app)
-            }
-        }.start()
-    }
-
-    private fun showFullScreenBlocker(reason: String, app: AppEntry) {
-        clearOverlays()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) return
-
-        val overlayType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
-            WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
-        else WindowManager.LayoutParams.TYPE_PHONE
-
-        blockerView = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            gravity = Gravity.CENTER
-            setBackgroundColor(Color.parseColor("#F5000000"))
-            setPadding(dp(32), dp(32), dp(32), dp(32))
-
-            addView(TextView(context).apply {
-                text = "TIME IS UP.\n\nYour stated goal was:\n\"$reason\"\n\nDid you finish what you came for?"
-                textSize = 18f
-                setTextColor(Color.WHITE)
-                typeface = Typeface.MONOSPACE
-                gravity = Gravity.CENTER
-                setPadding(0, 0, 0, dp(24))
-            })
-
-            addView(Button(context).apply {
-                text = "Yes — Close App & Go Home"
-                setBackgroundColor(Color.parseColor("#2E7D32"))
-                setTextColor(Color.WHITE)
-                setOnClickListener {
-                    clearOverlays()
-                    val home = Intent(context, MainActivity::class.java).apply {
-                        addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                // Optional Home Screen Widget Area
+                if (widgetsEnabled && activeWidgetId != -1) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(120.dp)
+                            .border(1.dp, Color(0xFF2A2A2A))
+                            .padding(8.dp)
+                    ) {
+                        AndroidView(
+                            factory = { ctx ->
+                                val info = appWidgetManager.getAppWidgetInfo(activeWidgetId)
+                                appWidgetHost.createView(ctx, activeWidgetId, info)
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
                     }
-                    startActivity(home)
+                    Spacer(modifier = Modifier.height(16.dp))
                 }
-            })
 
-            addView(Button(context).apply {
-                text = "Need 2 final minutes"
-                setOnClickListener {
-                    showStickyTopPill(reason, 2 * 60 * 1000L, app)
+                // Non-Auto-Focusing Minimal Search Bar
+                OutlinedTextField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                    placeholder = { Text(strings.searchPlaceholder, fontSize = 14.sp, color = Color.Gray) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color.White,
+                        unfocusedBorderColor = Color(0xFF333333),
+                        cursorColor = Color.White
+                    )
+                )
+
+                Spacer(modifier = Modifier.height(20.dp))
+
+                // Filtered App List
+                val filteredApps = apps.filter {
+                    it.label.contains(searchQuery, ignoreCase = true)
                 }
-            })
-        }
 
-        val params = WindowManager.LayoutParams(
-            WindowManager.LayoutParams.MATCH_PARENT,
-            WindowManager.LayoutParams.MATCH_PARENT,
-            overlayType,
-            WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
-            PixelFormat.TRANSLUCENT
-        )
-        windowManager?.addView(blockerView, params)
-    }
-
-    private fun clearOverlays() {
-        activeTimer?.cancel()
-        pillView?.let { runCatching { windowManager?.removeView(it) } }
-        blockerView?.let { runCatching { windowManager?.removeView(it) } }
-        pillView = null
-        blockerView = null
-    }
-
-    private fun launchPackage(pkg: String) {
-        packageManager.getLaunchIntentForPackage(pkg)?.let { startActivity(it) }
-    }
-
-    private fun saveThought(thought: String) {
-        val list = (prefs.getStringSet("thoughts", setOf()) ?: setOf()).toMutableSet()
-        list.add("${System.currentTimeMillis()}|$thought")
-        prefs.edit().putStringSet("thoughts", list).apply()
-        renderThoughts()
-    }
-
-    private fun renderThoughts() {
-        thoughtsContainer.removeAllViews()
-        val raw = (prefs.getStringSet("thoughts", setOf()) ?: setOf()).sorted()
-        raw.forEach { entry ->
-            val label = entry.substringAfter("|")
-            val item = TextView(this).apply {
-                text = "• $label  [tap to clear]"
-                setTextColor(Color.GRAY)
-                textSize = 13f
-                setPadding(0, dp(4), 0, dp(4))
-                setOnClickListener {
-                    val updated = (prefs.getStringSet("thoughts", setOf()) ?: setOf()).toMutableSet()
-                    updated.remove(entry)
-                    prefs.edit().putStringSet("thoughts", updated).apply()
-                    renderThoughts()
+                LazyColumn(
+                    modifier = Modifier.weight(1f),
+                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                ) {
+                    items(filteredApps, key = { it.packageName }) { app ->
+                        AppRow(
+                            app = app,
+                            strings = strings,
+                            onClick = {
+                                focusManager.clearFocus()
+                                handleAppClick(
+                                    app = app,
+                                    context = context,
+                                    onRequirePrompt = { selectedAppForPrompt = it }
+                                )
+                            }
+                        )
+                    }
                 }
             }
-            thoughtsContainer.addView(item)
+
+            // Pre-Session Delay + Intention & Slider Timer Dialog for Yellow/Red Apps
+            if (selectedAppForPrompt != null) {
+                IntentionAndTimerDialog(
+                    app = selectedAppForPrompt!!,
+                    strings = strings,
+                    delaySeconds = preSessionDelaySec,
+                    onDismiss = { selectedAppForPrompt = null },
+                    onConfirm = { durationMinutes, _ ->
+                        val targetApp = selectedAppForPrompt!!
+                        selectedAppForPrompt = null
+                        activeSessionApp = targetApp
+                        sessionRemainingSeconds = durationMinutes * 60
+                        launchPackage(context, targetApp.packageName)
+                    }
+                )
+            }
         }
     }
 }
+
+// --- APP ITEM ROW ---
+
+@Composable
+fun AppRow(app: AppItem, strings: Strings, onClick: () -> Unit) {
+    val now = System.currentTimeMillis()
+    val inCooldown = app.tier == AppTier.RED && now < app.cooldownUntilMillis
+    val quotaExceeded = app.tier == AppTier.RED && app.dailyQuotaMinutes > 0 && app.usedMinutesToday >= app.dailyQuotaMinutes
+
+    val tierIndicatorColor = when (app.tier) {
+        AppTier.GREEN -> Color(0xFF4CAF50)
+        AppTier.YELLOW -> Color(0xFFFFC107)
+        AppTier.RED -> Color(0xFFF44336)
+    }
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(enabled = !inCooldown && !quotaExceeded) { onClick() }
+            .padding(vertical = 6.dp)
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+            modifier = Modifier.fillMaxWidth()
+        ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Box(
+                    modifier = Modifier
+                        .size(8.dp)
+                        .background(tierIndicatorColor)
+                )
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(
+                    text = app.label,
+                    color = if (inCooldown || quotaExceeded) Color.DarkGray else Color.White,
+                    fontSize = 16.sp
+                )
+            }
+
+            if (app.tier == AppTier.RED && app.dailyQuotaMinutes > 0) {
+                Text(
+                    text = "${app.usedMinutesToday}/${app.dailyQuotaMinutes}m",
+                    fontSize = 12.sp,
+                    color = Color.Gray
+                )
+            }
+        }
+
+        if (inCooldown) {
+            val remainingMin = ((app.cooldownUntilMillis - now) / 60000).coerceAtLeast(1)
+            Text(
+                text = "${strings.inCooldown} ${remainingMin}m",
+                fontSize = 11.sp,
+                color = Color(0xFFE57373),
+                modifier = Modifier.padding(start = 20.dp, top = 2.dp)
+            )
+        } else if (quotaExceeded) {
+            Text(
+                text = strings.quotaReached,
+                fontSize = 11.sp,
+                color = Color(0xFFE57373),
+                modifier = Modifier.padding(start = 20.dp, top = 2.dp)
+            )
+        }
+    }
+}
+
+// --- INTENTION, DELAY & SLIDER TIMER DIALOG ---
+
+@Composable
+fun IntentionAndTimerDialog(
+    app: AppItem,
+    strings: Strings,
+    delaySeconds: Int,
+    onDismiss: () -> Unit,
+    onConfirm: (Int, String) -> Unit
+) {
+    var remainingDelay by remember { mutableStateOf(delaySeconds) }
+    var intentionText by remember { mutableStateOf("") }
+    var durationSlider by remember { mutableStateOf(if (app.tier == AppTier.RED) 10f else 15f) }
+
+    LaunchedEffect(Unit) {
+        while (remainingDelay > 0) {
+            delay(1000L)
+            remainingDelay -= 1
+        }
+    }
+
+    Dialog(onDismissRequest = onDismiss) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Color(0xFF141414))
+                .border(1.dp, Color(0xFF333333))
+                .padding(24.dp),
+            verticalArrangement = Arrangement.spacedBy(16.dp)
+        ) {
+            Text(text = app.label, style = MaterialTheme.typography.titleLarge)
+
+            if (remainingDelay > 0) {
+                Text(
+                    text = "${strings.preSessionDelayText} ${remainingDelay}s...",
+                  
