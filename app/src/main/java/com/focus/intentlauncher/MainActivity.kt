@@ -18,21 +18,9 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalDrawerSheet
-import androidx.compose.material3.ModalNavigationDrawer
-import androidx.compose.material3.OutlinedTextField
-import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.Slider
-import androidx.compose.material3.Switch
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
-import androidx.compose.material3.Typography
-import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.rememberDrawerState
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -42,6 +30,7 @@ import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.LayoutDirection
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -86,7 +75,7 @@ data class Strings(
 val EnglishStrings = Strings(
     searchPlaceholder = "Search apps...",
     settingsTitle = "Settings & Regulation",
-    intentionPrompt = "State your intention for opening this app:",
+    intentionPrompt = "State your intention (min 6 chars):",
     preSessionDelayText = "Take a breath. Starting in",
     selectDuration = "Session duration (minutes):",
     startSession = "Begin Session",
@@ -108,7 +97,7 @@ val EnglishStrings = Strings(
 val ArabicStrings = Strings(
     searchPlaceholder = "ابحث عن التطبيقات...",
     settingsTitle = "الإعدادات والتنظيم",
-    intentionPrompt = "حدد نيتك لفتح هذا التطبيق:",
+    intentionPrompt = "حدد نيتك (6 أحرف على الأقل):",
     preSessionDelayText = "خذ نفساً عميقاً. يبدأ خلال",
     selectDuration = "مدة الجلسة (بالدقائق):",
     startSession = "ابدأ الجلسة",
@@ -249,7 +238,7 @@ fun LauncherScreen(
                 }
                 activeSessionApp = null
                 val homeIntent = Intent(context, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
                 }
                 context.startActivity(homeIntent)
             }
@@ -342,11 +331,44 @@ fun LauncherScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                 }
 
+                val filteredApps = remember(searchQuery, apps) {
+                    if (searchQuery.isBlank()) {
+                        emptyList()
+                    } else {
+                        val query = searchQuery.trim()
+                        val startsWithList = mutableListOf<AppItem>()
+                        val containsList = mutableListOf<AppItem>()
+
+                        apps.forEach { app ->
+                            if (app.label.startsWith(query, ignoreCase = true)) {
+                                startsWithList.add(app)
+                            } else if (app.label.contains(query, ignoreCase = true)) {
+                                containsList.add(app)
+                            }
+                        }
+                        startsWithList + containsList
+                    }
+                }
+
                 OutlinedTextField(
                     value = searchQuery,
                     onValueChange = { searchQuery = it },
                     placeholder = { Text(strings.searchPlaceholder, fontSize = 14.sp, color = Color.Gray) },
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
+                    keyboardActions = KeyboardActions(
+                        onSearch = {
+                            if (filteredApps.isNotEmpty()) {
+                                val topApp = filteredApps.first()
+                                focusManager.clearFocus()
+                                handleAppClick(
+                                    app = topApp,
+                                    context = context,
+                                    onRequirePrompt = { selectedAppForPrompt = it }
+                                )
+                            }
+                        }
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedBorderColor = Color.White,
@@ -356,10 +378,6 @@ fun LauncherScreen(
                 )
 
                 Spacer(modifier = Modifier.height(20.dp))
-
-                val filteredApps = apps.filter {
-                    it.label.contains(searchQuery, ignoreCase = true)
-                }
 
                 LazyColumn(
                     modifier = Modifier.weight(1f),
@@ -486,24 +504,309 @@ fun IntentionAndTimerDialog(
     }
 
     Dialog(onDismissRequest = onDismiss) {
-        Column(
+        Box(
             modifier = Modifier
                 .fillMaxWidth()
+                .heightIn(max = 480.dp)
                 .background(Color(0xFF141414))
                 .border(1.dp, Color(0xFF333333))
-                .padding(24.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp)
+                .padding(24.dp)
         ) {
-            Text(text = app.label, style = MaterialTheme.typography.titleLarge)
+            Column(
+                modifier = Modifier.fillMaxWidth(),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(text = app.label, style = MaterialTheme.typography.titleLarge)
 
-            if (remainingDelay > 0) {
-                Text(
-                    text = "${strings.preSessionDelayText} ${remainingDelay}s...",
-                    fontSize = 14.sp,
-                    color = Color.Gray
-                )
-            } else {
-                OutlinedTextField(
-                    value = intentionText,
-                    onValueChange = { intentionText = it },
-             
+                if (remainingDelay > 0) {
+                    Text(
+                        text = "${strings.preSessionDelayText} ${remainingDelay}s...",
+                        fontSize = 14.sp,
+                        color = Color.Gray
+                    )
+                } else {
+                    OutlinedTextField(
+                        value = intentionText,
+                        onValueChange = { intentionText = it },
+                        label = { Text(strings.intentionPrompt, fontSize = 12.sp) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+
+                    if (intentionText.trim().length < 6) {
+                        Text(
+                            text = "Please enter at least 6 characters.",
+                            fontSize = 11.sp,
+                            color = Color(0xFFE57373)
+                        )
+                    }
+
+                    Text(
+                        text = "${strings.selectDuration} ${durationSlider.toInt()}m",
+                        fontSize = 14.sp
+                    )
+
+                    Slider(
+                        value = durationSlider,
+                        onValueChange = { durationSlider = it },
+                        valueRange = 1f..(if (app.tier == AppTier.RED) 30f else 60f),
+                        steps = 28
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(onClick = onDismiss) {
+                            Text(strings.cancel, color = Color.Gray)
+                        }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(
+                            enabled = intentionText.trim().length >= 6,
+                            onClick = { onConfirm(durationSlider.toInt(), intentionText) },
+                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
+                        ) {
+                            Text(strings.startSession)
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsDrawer(
+    strings: Strings,
+    apps: List<AppItem>,
+    prefs: SharedPreferences,
+    isArabic: Boolean,
+    onToggleLanguage: () -> Unit,
+    preSessionDelaySec: Int,
+    onUpdateDelay: (Int) -> Unit,
+    redCooldownMin: Int,
+    onUpdateCooldown: (Int) -> Unit,
+    focusModeEnabled: Boolean,
+    onToggleFocus: (Boolean) -> Unit,
+    widgetsEnabled: Boolean,
+    onToggleWidgets: (Boolean) -> Unit,
+    context: Context
+) {
+    var settingsUnlocked by remember { mutableStateOf(false) }
+    var gateCountdown by remember { mutableStateOf(0) }
+
+    LaunchedEffect(gateCountdown) {
+        if (gateCountdown > 0) {
+            delay(1000L)
+            gateCountdown -= 1
+            if (gateCountdown == 0) {
+                settingsUnlocked = true
+            }
+        }
+    }
+
+    val baselineDailyAvg = remember { getPast7DayAverageMinutes(context) }
+    val todayTotal = apps.sumOf { it.usedMinutesToday }
+
+    ModalDrawerSheet(
+        drawerContainerColor = Color(0xFF101010),
+        drawerContentColor = Color.White,
+        modifier = Modifier.fillMaxWidth(0.88f)
+    ) {
+        LazyColumn(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(20.dp),
+            verticalArrangement = Arrangement.spacedBy(18.dp)
+        ) {
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(strings.settingsTitle, style = MaterialTheme.typography.titleLarge)
+                    TextButton(onClick = onToggleLanguage) {
+                        Text(strings.languageToggle, color = Color.White, fontSize = 12.sp)
+                    }
+                }
+                HorizontalDivider(color = Color(0xFF2A2A2A))
+            }
+
+            item {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(1.dp, Color(0xFF2A2A2A))
+                        .padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Text(strings.endOfDayReport, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("${strings.beforeAfterComparison} ${baselineDailyAvg}m -> ${todayTotal}m", fontSize = 13.sp, color = Color.LightGray)
+                    val delta = baselineDailyAvg - todayTotal
+                    val effectText = if (delta >= 0) "-${delta}m saved today" else "+${-delta}m over average"
+                    Text(effectText, fontSize = 12.sp, color = if (delta >= 0) Color(0xFF81C784) else Color(0xFFE57373))
+                }
+            }
+
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(strings.focusMode, fontSize = 13.sp)
+                    Switch(checked = focusModeEnabled, onCheckedChange = onToggleFocus)
+                }
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(strings.enableWidgets, fontSize = 13.sp)
+                    Switch(checked = widgetsEnabled, onCheckedChange = onToggleWidgets)
+                }
+            }
+
+            item {
+                if (!settingsUnlocked) {
+                    Button(
+                        onClick = { if (gateCountdown == 0) gateCountdown = 5 },
+                        modifier = Modifier.fillMaxWidth(),
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF222222), contentColor = Color.White)
+                    ) {
+                        Text(
+                            if (gateCountdown > 0) "${strings.gatePrompt} (${gateCountdown}s)"
+                            else strings.unlockSettings
+                        )
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                        Text("${strings.delaySetting} ${preSessionDelaySec}s", fontSize = 13.sp)
+                        Slider(
+                            value = preSessionDelaySec.toFloat(),
+                            onValueChange = { onUpdateDelay(it.toInt()) },
+                            valueRange = 3f..10f,
+                            steps = 6
+                        )
+
+                        Text("${strings.cooldownSetting} ${redCooldownMin}m", fontSize = 13.sp)
+                        Slider(
+                            value = redCooldownMin.toFloat(),
+                            onValueChange = { onUpdateCooldown(it.toInt()) },
+                            valueRange = 5f..60f,
+                            steps = 10
+                        )
+                    }
+                }
+            }
+
+            if (settingsUnlocked) {
+                items(apps, key = { "setting_${it.packageName}" }) { app ->
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(1.dp, Color(0xFF222222))
+                            .padding(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(app.label, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                AppTier.entries.forEach { tier ->
+                                    val selected = app.tier == tier
+                                    Text(
+                                        text = tier.name.first().toString(),
+                                        fontSize = 12.sp,
+                                        color = if (selected) Color.Black else Color.Gray,
+                                        modifier = Modifier
+                                            .background(if (selected) Color.White else Color.Transparent)
+                                            .border(1.dp, Color.DarkGray)
+                                            .clickable {
+                                                app.tier = tier
+                                                prefs.edit().putString("tier_${app.packageName}", tier.name).apply()
+                                            }
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        AnimatedVisibility(visible = app.tier == AppTier.RED) {
+                            Column(modifier = Modifier.padding(top = 8.dp)) {
+                                Text(
+                                    text = "Daily Quota: ${if (app.dailyQuotaMinutes == 0) "Off" else "${app.dailyQuotaMinutes}m"}",
+                                    fontSize = 11.sp,
+                                    color = Color.Gray
+                                )
+                                Slider(
+                                    value = app.dailyQuotaMinutes.toFloat(),
+                                    onValueChange = {
+                                        app.dailyQuotaMinutes = it.toInt()
+                                        prefs.edit().putInt("quota_${app.packageName}", it.toInt()).apply()
+                                    },
+                                    valueRange = 0f..120f,
+                                    steps = 23
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun handleAppClick(
+    app: AppItem,
+    context: Context,
+    onRequirePrompt: (AppItem) -> Unit
+) {
+    when (app.tier) {
+        AppTier.GREEN -> launchPackage(context, app.packageName)
+        AppTier.YELLOW, AppTier.RED -> onRequirePrompt(app)
+    }
+}
+
+fun launchPackage(context: Context, packageName: String) {
+    val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+    if (launchIntent != null) {
+        launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS)
+        context.startActivity(launchIntent)
+    }
+}
+
+fun hasUsageStatsPermission(context: Context): Boolean {
+    val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+    val mode = appOps.checkOpNoThrow(
+        AppOpsManager.OPSTR_GET_USAGE_STATS,
+        Process.myUid(),
+        context.packageName
+    )
+    return mode == AppOpsManager.MODE_ALLOWED
+}
+
+fun getTodayUsageMinutes(context: Context): Map<String, Int> {
+    if (!hasUsageStatsPermission(context)) return emptyMap()
+    val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val calendar = Calendar.getInstance().apply {
+        set(Calendar.HOUR_OF_DAY, 0)
+        set(Calendar.MINUTE, 0)
+        set(Calendar.SECOND, 0)
+    }
+    val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, calendar.timeInMillis, System.currentTimeMillis())
+    return stats.associate { it.packageName to (it.totalTimeInForeground / 60000).toInt() }
+}
+
+fun getPast7DayAverageMinutes(context: Context): Int {
+    if (!hasUsageStatsPermission(context)) return 0
+    val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val end = System.currentTimeMillis()
+    val start = end - (7L * 24 * 60 * 60 * 1000)
+    val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end)
+    val totalMinutes = stats.sumOf { (it.totalTimeInForeground / 60000).toInt() }
+    return totalMinutes / 7
+}
