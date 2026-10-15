@@ -1,6 +1,7 @@
-package com.minimal.regulatedlauncher
+package com.focus.intentlauncher
 
 import android.app.AppOpsManager
+import android.app.usage.UsageEvents
 import android.app.usage.UsageStatsManager
 import android.appwidget.AppWidgetHost
 import android.appwidget.AppWidgetManager
@@ -9,25 +10,44 @@ import android.content.Intent
 import android.content.SharedPreferences
 import android.os.Bundle
 import android.os.Process
+import android.provider.Settings
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.*
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ModalDrawerSheet
+import androidx.compose.material3.ModalNavigationDrawer
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.Slider
+import androidx.compose.material3.Switch
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.material3.Typography
+import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.platform.LocalLifecycleOwner
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
@@ -36,8 +56,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.window.Dialog
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import kotlinx.coroutines.delay
-import java.util.*
+import java.text.SimpleDateFormat
+import java.util.Calendar
+import java.util.Date
+import java.util.Locale
 
 enum class AppTier { GREEN, YELLOW, RED }
 
@@ -52,8 +77,10 @@ data class AppItem(
 
 data class Strings(
     val searchPlaceholder: String,
+    val thoughtPlaceholder: String,
     val settingsTitle: String,
     val intentionPrompt: String,
+    val minCharsWarning: String,
     val preSessionDelayText: String,
     val selectDuration: String,
     val startSession: String,
@@ -61,59 +88,66 @@ data class Strings(
     val quotaReached: String,
     val inCooldown: String,
     val focusMode: String,
-    val usageHistory: String,
     val endOfDayReport: String,
     val gatePrompt: String,
     val unlockSettings: String,
-    val cooldownSetting: String,
+    val redCooldownSetting: String,
+    val yellowCooldownSetting: String,
     val delaySetting: String,
     val enableWidgets: String,
     val languageToggle: String,
-    val beforeAfterComparison: String
+    val beforeAfterComparison: String,
+    val grantPermission: String
 )
 
 val EnglishStrings = Strings(
     searchPlaceholder = "Search apps...",
+    thoughtPlaceholder = "Dump intrusive thought & press Enter...",
     settingsTitle = "Settings & Regulation",
     intentionPrompt = "State your intention (min 6 chars):",
-    preSessionDelayText = "Take a breath. Starting in",
+    minCharsWarning = "Enter at least 6 characters to proceed.",
+    preSessionDelayText = "Take a breath. Unlocking in",
     selectDuration = "Session duration (minutes):",
     startSession = "Begin Session",
     cancel = "Cancel",
     quotaReached = "Daily quota reached. Locked until tomorrow.",
-    inCooldown = "App suspended. Cooldown active:",
-    focusMode = "Focus Mode (Silence Notifications)",
-    usageHistory = "Before & After Usage Impact",
+    inCooldown = "Cooling down. Wait:",
+    focusMode = "Focus Mode",
     endOfDayReport = "End-of-Day Report",
-    gatePrompt = "Hold or wait to unlock critical settings...",
+    gatePrompt = "Wait to unlock settings...",
     unlockSettings = "Unlock Settings (5s delay)",
-    cooldownSetting = "Red Tier Cooldown (min):",
+    redCooldownSetting = "Red Cooldown Wait (min):",
+    yellowCooldownSetting = "Yellow Re-open Wait (min):",
     delaySetting = "Pre-session Delay (sec):",
     enableWidgets = "Show Home Screen Widget",
-    languageToggle = "العربية (Arabic)",
-    beforeAfterComparison = "Past Avg vs Today:"
+    languageToggle = "العربية",
+    beforeAfterComparison = "7-Day Avg vs Today:",
+    grantPermission = "Grant Usage Permission (Required for Strict Lock)"
 )
 
 val ArabicStrings = Strings(
     searchPlaceholder = "ابحث عن التطبيقات...",
+    thoughtPlaceholder = "اكتب الفكرة الملحة واضغط إدخال...",
     settingsTitle = "الإعدادات والتنظيم",
     intentionPrompt = "حدد نيتك (6 أحرف على الأقل):",
-    preSessionDelayText = "خذ نفساً عميقاً. يبدأ خلال",
+    minCharsWarning = "يرجى إدخال 6 أحرف على الأقل للمتابعة.",
+    preSessionDelayText = "خذ نفساً عميقاً. يفتح خلال",
     selectDuration = "مدة الجلسة (بالدقائق):",
     startSession = "ابدأ الجلسة",
     cancel = "إلغاء",
-    quotaReached = "تم استنفاد الحصة اليومية. مغلق حتى الغد.",
-    inCooldown = "التطبيق معلق. فترة التهدئة نشطة:",
-    focusMode = "وضع التركيز (كتم الإشعارات)",
-    usageHistory = "مقارنة الاستخدام (قبل وبعد)",
+    quotaReached = "انتهت الحصة اليومية. مغلق حتى الغد.",
+    inCooldown = "فترة انتظار قبل إعادة الفتح:",
+    focusMode = "وضع التركيز",
     endOfDayReport = "تقرير نهاية اليوم",
-    gatePrompt = "انتظر لفتح الإعدادات الحساسة...",
+    gatePrompt = "انتظر لفتح الإعدادات...",
     unlockSettings = "فتح الإعدادات (تأخير 5 ثوانٍ)",
-    cooldownSetting = "فترة التهدئة للفئة الحمراء (دقيقة):",
+    redCooldownSetting = "انتظار الفئة الحمراء (دقيقة):",
+    yellowCooldownSetting = "انتظار إعادة فتح الصفراء (دقيقة):",
     delaySetting = "تأخير ما قبل الجلسة (ثانية):",
-    enableWidgets = "إظهار الويدجت على الشاشة",
-    languageToggle = "English (الإنجليزية)",
-    beforeAfterComparison = "المعدل السابق مقابل اليوم:"
+    enableWidgets = "إظهار الويدجت",
+    languageToggle = "English",
+    beforeAfterComparison = "المعدل السابق مقابل اليوم:",
+    grantPermission = "منح إذن الاستخدام (مطلوب للحظر الصارم)"
 )
 
 class MainActivity : ComponentActivity() {
@@ -148,23 +182,23 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MinimalLauncherTheme(content: @Composable () -> Unit) {
-    val darkColorScheme = darkColorScheme(
+    val scheme = darkColorScheme(
         primary = Color.White,
         onPrimary = Color.Black,
         background = Color(0xFF0A0A0A),
         onBackground = Color(0xFFEAEAEA),
-        surface = Color(0xFF141414),
+        surface = Color(0xFF121212),
         onSurface = Color(0xFFEAEAEA)
     )
     MaterialTheme(
-        colorScheme = darkColorScheme,
+        colorScheme = scheme,
         typography = Typography(
-            bodyLarge = androidx.compose.ui.text.TextStyle(
+            bodyLarge = TextStyle(
                 fontFamily = FontFamily.Monospace,
-                fontSize = 16.sp,
+                fontSize = 15.sp,
                 color = Color(0xFFEAEAEA)
             ),
-            titleLarge = androidx.compose.ui.text.TextStyle(
+            titleLarge = TextStyle(
                 fontFamily = FontFamily.Monospace,
                 fontWeight = FontWeight.Light,
                 fontSize = 22.sp,
@@ -182,6 +216,8 @@ fun LauncherScreen(
     appWidgetManager: AppWidgetManager,
     appWidgetHost: AppWidgetHost
 ) {
+    BackHandler(enabled = true) { }
+
     var isArabic by remember { mutableStateOf(prefs.getBoolean("is_arabic", false)) }
     val strings = if (isArabic) ArabicStrings else EnglishStrings
     val layoutDirection = if (isArabic) LayoutDirection.Rtl else LayoutDirection.Ltr
@@ -189,58 +225,136 @@ fun LauncherScreen(
     val focusManager = LocalFocusManager.current
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
 
-    var preSessionDelaySec by remember { mutableStateOf(prefs.getInt("delay_sec", 4)) }
+    var preSessionDelaySec by remember { mutableStateOf(prefs.getInt("delay_sec", 5)) }
+    var yellowCooldownMin by remember { mutableStateOf(prefs.getInt("yellow_cooldown_min", 2)) }
     var redCooldownMin by remember { mutableStateOf(prefs.getInt("cooldown_min", 15)) }
     var focusModeEnabled by remember { mutableStateOf(prefs.getBoolean("focus_mode", false)) }
     var widgetsEnabled by remember { mutableStateOf(prefs.getBoolean("widgets_enabled", false)) }
-    var activeWidgetId by remember { mutableStateOf(prefs.getInt("active_widget_id", -1)) }
+    val activeWidgetId by remember { mutableStateOf(prefs.getInt("active_widget_id", -1)) }
 
     var searchQuery by remember { mutableStateOf("") }
+    var thoughtInput by remember { mutableStateOf("") }
+
+    val thoughts = remember {
+        val saved = prefs.getString("saved_thoughts", "") ?: ""
+        val list = if (saved.isBlank()) emptyList() else saved.split("|||")
+        mutableStateListOf<String>().apply { addAll(list) }
+    }
+
+    fun saveThoughts() {
+        prefs.edit().putString("saved_thoughts", thoughts.joinToString("|||")).apply()
+    }
 
     val apps = remember { mutableStateListOf<AppItem>() }
-    LaunchedEffect(Unit) {
+    var hasPermission by remember { mutableStateOf(hasUsageStatsPermission(context)) }
+
+    var selectedAppForPrompt by remember { mutableStateOf<AppItem?>(null) }
+    var activeSessionPkg by remember { mutableStateOf<String?>(null) }
+    var activeSessionLabel by remember { mutableStateOf("") }
+    var activeSessionTier by remember { mutableStateOf(AppTier.GREEN) }
+    var sessionEndTimeMillis by remember { mutableStateOf(0L) }
+    var sessionRemainingSeconds by remember { mutableStateOf(0) }
+    var userLeftLauncher by remember { mutableStateOf(false) }
+
+    var currentTimeString by remember {
+        mutableStateOf(SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()))
+    }
+
+    fun reloadApps() {
+        hasPermission = hasUsageStatsPermission(context)
         val pm = context.packageManager
-        val intent = Intent(Intent.ACTION_MAIN, null).apply {
+        val mainIntent = Intent(Intent.ACTION_MAIN, null).apply {
             addCategory(Intent.CATEGORY_LAUNCHER)
         }
-        val resolveInfos = pm.queryIntentActivities(intent, 0)
+        val resolveInfos = pm.queryIntentActivities(mainIntent, 0)
         val usageStats = getTodayUsageMinutes(context)
 
         apps.clear()
-        resolveInfos.forEach { info ->
+        for (info in resolveInfos) {
             val pkg = info.activityInfo.packageName
             if (pkg != context.packageName) {
                 val label = info.loadLabel(pm).toString()
-                val savedTier = AppTier.valueOf(prefs.getString("tier_$pkg", AppTier.GREEN.name)!!)
+                val tierStr = prefs.getString("tier_$pkg", AppTier.GREEN.name) ?: AppTier.GREEN.name
+                val savedTier = try { AppTier.valueOf(tierStr) } catch (e: Exception) { AppTier.GREEN }
                 val quota = prefs.getInt("quota_$pkg", 0)
                 val cooldown = prefs.getLong("cooldown_$pkg", 0L)
                 val usedToday = usageStats[pkg] ?: 0
                 apps.add(AppItem(pkg, label, savedTier, quota, usedToday, cooldown))
             }
         }
-        apps.sortBy { it.label.lowercase(Locale.getDefault()) }
+        apps.sortBy { item -> item.label.lowercase(Locale.getDefault()) }
     }
 
-    var selectedAppForPrompt by remember { mutableStateOf<AppItem?>(null) }
-    var activeSessionApp by remember { mutableStateOf<AppItem?>(null) }
-    var sessionRemainingSeconds by remember { mutableStateOf(0) }
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_STOP) {
+                if (activeSessionPkg != null) {
+                    userLeftLauncher = true
+                }
+            } else if (event == Lifecycle.Event.ON_RESUME) {
+                reloadApps()
+                searchQuery = ""
+                if (activeSessionPkg != null && userLeftLauncher) {
+                    activeSessionPkg = null
+                    sessionEndTimeMillis = 0L
+                    sessionRemainingSeconds = 0
+                    userLeftLauncher = false
+                }
+            }
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
 
-    LaunchedEffect(activeSessionApp, sessionRemainingSeconds) {
-        if (activeSessionApp != null && sessionRemainingSeconds > 0) {
+    // Master Ticker: Clock, Active Session Timer, and Recents Loophole Guard
+    LaunchedEffect(Unit) {
+        while (true) {
             delay(1000L)
-            sessionRemainingSeconds -= 1
-            if (sessionRemainingSeconds == 0) {
-                val expiredApp = activeSessionApp!!
-                if (expiredApp.tier == AppTier.RED) {
-                    val cooldownUntil = System.currentTimeMillis() + (redCooldownMin * 60 * 1000L)
-                    expiredApp.cooldownUntilMillis = cooldownUntil
-                    prefs.edit().putLong("cooldown_${expiredApp.packageName}", cooldownUntil).apply()
+            val now = System.currentTimeMillis()
+            currentTimeString = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(now))
+
+            if (activeSessionPkg != null && sessionEndTimeMillis > 0L) {
+                val rem = ((sessionEndTimeMillis - now) / 1000L).toInt()
+                if (rem > 0) {
+                    sessionRemainingSeconds = rem
+                } else {
+                    val expiredPkg = activeSessionPkg!!
+                    val waitMin = if (activeSessionTier == AppTier.RED) redCooldownMin else yellowCooldownMin
+                    val cooldownUntil = now + (waitMin * 60 * 1000L)
+                    prefs.edit().putLong("cooldown_$expiredPkg", cooldownUntil).apply()
+
+                    for (app in apps) {
+                        if (app.packageName == expiredPkg) {
+                            app.cooldownUntilMillis = cooldownUntil
+                        }
+                    }
+
+                    activeSessionPkg = null
+                    sessionEndTimeMillis = 0L
+                    sessionRemainingSeconds = 0
+                    userLeftLauncher = false
+                    bringLauncherToFront(context)
                 }
-                activeSessionApp = null
-                val homeIntent = Intent(context, MainActivity::class.java).apply {
-                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS
+            }
+
+            // Recents Loophole Blocker: Intercepts unauthorized Yellow/Red launches from Recents
+            if (hasPermission) {
+                val fgPkg = getCurrentForegroundPackage(context)
+                if (fgPkg != null && fgPkg != context.packageName) {
+                    var matchedApp: AppItem? = null
+                    for (app in apps) {
+                        if (app.packageName == fgPkg) {
+                            matchedApp = app
+                            break
+                        }
+                    }
+                    if (matchedApp != null && (matchedApp.tier == AppTier.YELLOW || matchedApp.tier == AppTier.RED)) {
+                        if (activeSessionPkg != fgPkg) {
+                            bringLauncherToFront(context)
+                        }
+                    }
                 }
-                context.startActivity(homeIntent)
             }
         }
     }
@@ -253,30 +367,35 @@ fun LauncherScreen(
                     strings = strings,
                     apps = apps,
                     prefs = prefs,
-                    isArabic = isArabic,
+                    hasPermission = hasPermission,
                     onToggleLanguage = {
                         isArabic = !isArabic
                         prefs.edit().putBoolean("is_arabic", isArabic).apply()
                     },
                     preSessionDelaySec = preSessionDelaySec,
-                    onUpdateDelay = {
-                        preSessionDelaySec = it
-                        prefs.edit().putInt("delay_sec", it).apply()
+                    onUpdateDelay = { newVal ->
+                        preSessionDelaySec = newVal
+                        prefs.edit().putInt("delay_sec", newVal).apply()
+                    },
+                    yellowCooldownMin = yellowCooldownMin,
+                    onUpdateYellowCooldown = { newVal ->
+                        yellowCooldownMin = newVal
+                        prefs.edit().putInt("yellow_cooldown_min", newVal).apply()
                     },
                     redCooldownMin = redCooldownMin,
-                    onUpdateCooldown = {
-                        redCooldownMin = it
-                        prefs.edit().putInt("cooldown_min", it).apply()
+                    onUpdateRedCooldown = { newVal ->
+                        redCooldownMin = newVal
+                        prefs.edit().putInt("cooldown_min", newVal).apply()
                     },
                     focusModeEnabled = focusModeEnabled,
-                    onToggleFocus = {
-                        focusModeEnabled = it
-                        prefs.edit().putBoolean("focus_mode", it).apply()
+                    onToggleFocus = { newVal ->
+                        focusModeEnabled = newVal
+                        prefs.edit().putBoolean("focus_mode", newVal).apply()
                     },
                     widgetsEnabled = widgetsEnabled,
-                    onToggleWidgets = {
-                        widgetsEnabled = it
-                        prefs.edit().putBoolean("widgets_enabled", it).apply()
+                    onToggleWidgets = { newVal ->
+                        widgetsEnabled = newVal
+                        prefs.edit().putBoolean("widgets_enabled", newVal).apply()
                     },
                     context = context
                 )
@@ -286,38 +405,46 @@ fun LauncherScreen(
                 modifier = Modifier
                     .fillMaxSize()
                     .background(MaterialTheme.colorScheme.background)
-                    .clickable(indication = null, interactionSource = remember { androidx.compose.foundation.interaction.MutableInteractionSource() }) {
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() }
+                    ) {
                         focusManager.clearFocus()
                     }
                     .padding(horizontal = 24.dp, vertical = 36.dp)
             ) {
+                // Top Bar: Minimalist Clock & Active Session Pill
                 Row(
                     modifier = Modifier.fillMaxWidth(),
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
                     Text(
-                        text = java.text.SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date()),
+                        text = currentTimeString,
                         style = MaterialTheme.typography.titleLarge,
-                        fontSize = 32.sp
+                        fontSize = 34.sp
                     )
-                    if (activeSessionApp != null) {
+                    if (activeSessionPkg != null && sessionRemainingSeconds > 0) {
                         Text(
-                            text = "${activeSessionApp?.label}: ${sessionRemainingSeconds / 60}m ${sessionRemainingSeconds % 60}s",
+                            text = "$activeSessionLabel: ${sessionRemainingSeconds / 60}m ${sessionRemainingSeconds % 60}s",
                             fontSize = 12.sp,
-                            color = Color(0xFFFF6B6B)
+                            color = Color(0xFFFF6B6B),
+                            modifier = Modifier
+                                .border(1.dp, Color(0xFFFF6B6B))
+                                .padding(horizontal = 8.dp, vertical = 4.dp)
                         )
                     }
                 }
 
-                Spacer(modifier = Modifier.height(16.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
+                // Optional Widget Container
                 if (widgetsEnabled && activeWidgetId != -1) {
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(120.dp)
-                            .border(1.dp, Color(0xFF2A2A2A))
+                            .height(110.dp)
+                            .border(1.dp, Color(0xFF222222))
                             .padding(8.dp)
                     ) {
                         AndroidView(
@@ -331,18 +458,71 @@ fun LauncherScreen(
                     Spacer(modifier = Modifier.height(16.dp))
                 }
 
-                val filteredApps = remember(searchQuery, apps) {
+                // Intrusive Thoughts Dump Input + Constrained Scrollable Box (Max Height 120.dp)
+                OutlinedTextField(
+                    value = thoughtInput,
+                    onValueChange = { newText -> thoughtInput = newText },
+                    placeholder = { Text(strings.thoughtPlaceholder, fontSize = 12.sp, color = Color(0xFF666666)) },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = {
+                            val trimmed = thoughtInput.trim()
+                            if (trimmed.isNotEmpty()) {
+                                thoughts.add(0, trimmed)
+                                saveThoughts()
+                                thoughtInput = ""
+                            }
+                        }
+                    ),
+                    modifier = Modifier.fillMaxWidth(),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = Color(0xFF555555),                        unfocusedBorderColor = Color(0xFF222222),
+                        cursorColor = Color.White
+                    )
+                )
+
+                if (thoughts.isNotEmpty()) {
+                    Spacer(modifier = Modifier.height(8.dp))
+                    LazyColumn(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(max = 120.dp)
+                            .border(1.dp, Color(0xFF1F1F1F))
+                            .padding(8.dp),
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        items(thoughts) { thoughtItem ->
+                            Text(
+                                text = "• $thoughtItem",
+                                fontSize = 13.sp,
+                                color = Color(0xFFAAAAAA),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable {
+                                        thoughts.remove(thoughtItem)
+                                        saveThoughts()
+                                    }
+                                    .padding(vertical = 2.dp)
+                            )
+                        }
+                    }
+                }
+
+                Spacer(modifier = Modifier.height(16.dp))
+
+                // Prefix-First App Filtering
+                val filteredApps = remember(searchQuery, apps.size) {
                     if (searchQuery.isBlank()) {
                         emptyList()
                     } else {
-                        val query = searchQuery.trim()
+                        val q = searchQuery.trim()
                         val startsWithList = mutableListOf<AppItem>()
                         val containsList = mutableListOf<AppItem>()
-
-                        apps.forEach { app ->
-                            if (app.label.startsWith(query, ignoreCase = true)) {
+                        for (app in apps) {
+                            if (app.label.startsWith(q, ignoreCase = true)) {
                                 startsWithList.add(app)
-                            } else if (app.label.contains(query, ignoreCase = true)) {
+                            } else if (app.label.contains(q, ignoreCase = true)) {
                                 containsList.add(app)
                             }
                         }
@@ -350,22 +530,42 @@ fun LauncherScreen(
                     }
                 }
 
+                // Trigger helper for launching or prompting an app
+                fun triggerApp(target: AppItem) {
+                    val now = System.currentTimeMillis()
+                    val inCooldown = (target.tier == AppTier.RED || target.tier == AppTier.YELLOW) && now < target.cooldownUntilMillis
+                    val quotaExceeded = target.tier == AppTier.RED && target.dailyQuotaMinutes > 0 && target.usedMinutesToday >= target.dailyQuotaMinutes
+                    if (!inCooldown && !quotaExceeded) {
+                        focusManager.clearFocus()
+                        searchQuery = ""
+                        if (target.tier == AppTier.GREEN) {
+                            launchPackage(context, target.packageName)
+                        } else {
+                            selectedAppForPrompt = target
+                        }
+                    }
+                }
+
+                // Non-Auto-Focusing App Search Bar with Auto-Open on Unique Match & Enter Key Launch
                 OutlinedTextField(
                     value = searchQuery,
-                    onValueChange = { searchQuery = it },
+                    onValueChange = { newQuery ->
+                        searchQuery = newQuery
+                        val q = newQuery.trim()
+                        if (q.isNotEmpty()) {
+                            val matches = apps.filter { item -> item.label.contains(q, ignoreCase = true) }
+                            if (matches.size == 1) {
+                                triggerApp(matches[0])
+                            }
+                        }
+                    },
                     placeholder = { Text(strings.searchPlaceholder, fontSize = 14.sp, color = Color.Gray) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(
                         onSearch = {
                             if (filteredApps.isNotEmpty()) {
-                                val topApp = filteredApps.first()
-                                focusManager.clearFocus()
-                                handleAppClick(
-                                    app = topApp,
-                                    context = context,
-                                    onRequirePrompt = { selectedAppForPrompt = it }
-                                )
+                                triggerApp(filteredApps[0])
                             }
                         }
                     ),
@@ -377,24 +577,17 @@ fun LauncherScreen(
                     )
                 )
 
-                Spacer(modifier = Modifier.height(20.dp))
+                Spacer(modifier = Modifier.height(18.dp))
 
                 LazyColumn(
                     modifier = Modifier.weight(1f),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                    verticalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
-                    items(filteredApps, key = { it.packageName }) { app ->
+                    items(filteredApps, key = { item -> item.packageName }) { appItem ->
                         AppRow(
-                            app = app,
+                            app = appItem,
                             strings = strings,
-                            onClick = {
-                                focusManager.clearFocus()
-                                handleAppClick(
-                                    app = app,
-                                    context = context,
-                                    onRequirePrompt = { selectedAppForPrompt = it }
-                                )
-                            }
+                            onClick = { triggerApp(appItem) }
                         )
                     }
                 }
@@ -409,8 +602,12 @@ fun LauncherScreen(
                     onConfirm = { durationMinutes, _ ->
                         val targetApp = selectedAppForPrompt!!
                         selectedAppForPrompt = null
-                        activeSessionApp = targetApp
+                        activeSessionPkg = targetApp.packageName
+                        activeSessionLabel = targetApp.label
+                        activeSessionTier = targetApp.tier
+                        sessionEndTimeMillis = System.currentTimeMillis() + (durationMinutes * 60 * 1000L)
                         sessionRemainingSeconds = durationMinutes * 60
+                        userLeftLauncher = false
                         launchPackage(context, targetApp.packageName)
                     }
                 )
@@ -422,10 +619,10 @@ fun LauncherScreen(
 @Composable
 fun AppRow(app: AppItem, strings: Strings, onClick: () -> Unit) {
     val now = System.currentTimeMillis()
-    val inCooldown = app.tier == AppTier.RED && now < app.cooldownUntilMillis
+    val inCooldown = (app.tier == AppTier.RED || app.tier == AppTier.YELLOW) && now < app.cooldownUntilMillis
     val quotaExceeded = app.tier == AppTier.RED && app.dailyQuotaMinutes > 0 && app.usedMinutesToday >= app.dailyQuotaMinutes
 
-    val tierIndicatorColor = when (app.tier) {
+    val tierColor = when (app.tier) {
         AppTier.GREEN -> Color(0xFF4CAF50)
         AppTier.YELLOW -> Color(0xFFFFC107)
         AppTier.RED -> Color(0xFFF44336)
@@ -446,7 +643,7 @@ fun AppRow(app: AppItem, strings: Strings, onClick: () -> Unit) {
                 Box(
                     modifier = Modifier
                         .size(8.dp)
-                        .background(tierIndicatorColor)
+                        .background(tierColor)
                 )
                 Spacer(modifier = Modifier.width(12.dp))
                 Text(
@@ -466,9 +663,11 @@ fun AppRow(app: AppItem, strings: Strings, onClick: () -> Unit) {
         }
 
         if (inCooldown) {
-            val remainingMin = ((app.cooldownUntilMillis - now) / 60000).coerceAtLeast(1)
+            val remainingSec = ((app.cooldownUntilMillis - now) / 1000L).coerceAtLeast(1L)
+            val minPart = remainingSec / 60
+            val secPart = remainingSec % 60
             Text(
-                text = "${strings.inCooldown} ${remainingMin}m",
+                text = "${strings.inCooldown} ${minPart}m ${secPart}s",
                 fontSize = 11.sp,
                 color = Color(0xFFE57373),
                 modifier = Modifier.padding(start = 20.dp, top = 2.dp)
@@ -496,6 +695,11 @@ fun IntentionAndTimerDialog(
     var intentionText by remember { mutableStateOf("") }
     var durationSlider by remember { mutableStateOf(if (app.tier == AppTier.RED) 10f else 15f) }
 
+    val isValidIntention = remember(intentionText) {
+        val cleaned = intentionText.trim()
+        cleaned.length >= 6 && cleaned.toSet().size >= 3
+    }
+
     LaunchedEffect(Unit) {
         while (remainingDelay > 0) {
             delay(1000L)
@@ -507,8 +711,7 @@ fun IntentionAndTimerDialog(
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .heightIn(max = 480.dp)
-                .background(Color(0xFF141414))
+                .background(Color(0xFF121212))
                 .border(1.dp, Color(0xFF333333))
                 .padding(24.dp)
         ) {
@@ -527,15 +730,15 @@ fun IntentionAndTimerDialog(
                 } else {
                     OutlinedTextField(
                         value = intentionText,
-                        onValueChange = { intentionText = it },
+                        onValueChange = { newValue -> intentionText = newValue },
                         label = { Text(strings.intentionPrompt, fontSize = 12.sp) },
                         singleLine = true,
                         modifier = Modifier.fillMaxWidth()
                     )
 
-                    if (intentionText.trim().length < 6) {
+                    if (!isValidIntention) {
                         Text(
-                            text = "Please enter at least 6 characters.",
+                            text = strings.minCharsWarning,
                             fontSize = 11.sp,
                             color = Color(0xFFE57373)
                         )
@@ -548,7 +751,7 @@ fun IntentionAndTimerDialog(
 
                     Slider(
                         value = durationSlider,
-                        onValueChange = { durationSlider = it },
+                        onValueChange = { newVal -> durationSlider = newVal },
                         valueRange = 1f..(if (app.tier == AppTier.RED) 30f else 60f),
                         steps = 28
                     )
@@ -562,9 +765,12 @@ fun IntentionAndTimerDialog(
                         }
                         Spacer(modifier = Modifier.width(8.dp))
                         Button(
-                            enabled = intentionText.trim().length >= 6,
-                            onClick = { onConfirm(durationSlider.toInt(), intentionText) },
-                            colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)
+                            enabled = isValidIntention,
+                            onClick = { onConfirm(durationSlider.toInt(), intentionText.trim()) },
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = Color.White,
+                                contentColor = Color.Black
+                            )
                         ) {
                             Text(strings.startSession)
                         }
@@ -580,12 +786,14 @@ fun SettingsDrawer(
     strings: Strings,
     apps: List<AppItem>,
     prefs: SharedPreferences,
-    isArabic: Boolean,
+    hasPermission: Boolean,
     onToggleLanguage: () -> Unit,
     preSessionDelaySec: Int,
     onUpdateDelay: (Int) -> Unit,
+    yellowCooldownMin: Int,
+    onUpdateYellowCooldown: (Int) -> Unit,
     redCooldownMin: Int,
-    onUpdateCooldown: (Int) -> Unit,
+    onUpdateRedCooldown: (Int) -> Unit,
     focusModeEnabled: Boolean,
     onToggleFocus: (Boolean) -> Unit,
     widgetsEnabled: Boolean,
@@ -605,11 +813,14 @@ fun SettingsDrawer(
         }
     }
 
-    val baselineDailyAvg = remember { getPast7DayAverageMinutes(context) }
-    val todayTotal = apps.sumOf { it.usedMinutesToday }
+    val baselineDailyAvg = remember(hasPermission) { getPast7DayAverageMinutes(context) }
+    var todayTotal = 0
+    for (app in apps) {
+        todayTotal += app.usedMinutesToday
+    }
 
     ModalDrawerSheet(
-        drawerContainerColor = Color(0xFF101010),
+        drawerContainerColor = Color(0xFF0F0F0F),
         drawerContentColor = Color.White,
         modifier = Modifier.fillMaxWidth(0.88f)
     ) {
@@ -617,7 +828,7 @@ fun SettingsDrawer(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(20.dp),
-            verticalArrangement = Arrangement.spacedBy(18.dp)
+            verticalArrangement = Arrangement.spacedBy(16.dp)
         ) {
             item {
                 Row(
@@ -630,14 +841,28 @@ fun SettingsDrawer(
                         Text(strings.languageToggle, color = Color.White, fontSize = 12.sp)
                     }
                 }
-                HorizontalDivider(color = Color(0xFF2A2A2A))
+                HorizontalDivider(color = Color(0xFF262626))
+            }
+
+            if (!hasPermission) {
+                item {
+                    Button(
+                        onClick = {
+                            context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+                        },
+                        colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE57373), contentColor = Color.Black),
+                        modifier = Modifier.fillMaxWidth()
+                    ) {
+                        Text(strings.grantPermission, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
             }
 
             item {
                 Column(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .border(1.dp, Color(0xFF2A2A2A))
+                        .border(1.dp, Color(0xFF262626))
                         .padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)
                 ) {
@@ -681,28 +906,36 @@ fun SettingsDrawer(
                         )
                     }
                 } else {
-                    Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
                         Text("${strings.delaySetting} ${preSessionDelaySec}s", fontSize = 13.sp)
                         Slider(
                             value = preSessionDelaySec.toFloat(),
-                            onValueChange = { onUpdateDelay(it.toInt()) },
-                            valueRange = 3f..10f,
-                            steps = 6
+                            onValueChange = { v -> onUpdateDelay(v.toInt()) },
+                            valueRange = 3f..15f
                         )
 
-                        Text("${strings.cooldownSetting} ${redCooldownMin}m", fontSize = 13.sp)
+                        Text("${strings.yellowCooldownSetting} ${yellowCooldownMin}m", fontSize = 13.sp)
+                        Slider(
+                            value = yellowCooldownMin.toFloat(),
+                            onValueChange = { v -> onUpdateYellowCooldown(v.toInt()) },
+                            valueRange = 1f..30f
+                        )
+
+                        Text("${strings.redCooldownSetting} ${redCooldownMin}m", fontSize = 13.sp)
                         Slider(
                             value = redCooldownMin.toFloat(),
-                            onValueChange = { onUpdateCooldown(it.toInt()) },
-                            valueRange = 5f..60f,
-                            steps = 10
+                            onValueChange = { v -> onUpdateRedCooldown(v.toInt()) },
+                            valueRange = 5f..60f
                         )
                     }
                 }
             }
 
             if (settingsUnlocked) {
-                items(apps, key = { "setting_${it.packageName}" }) { app ->
+                items(apps, key = { item -> "setting_${item.packageName}" }) { appItem ->
+                    var currentTier by remember { mutableStateOf(appItem.tier) }
+                    var currentQuota by remember { mutableStateOf(appItem.dailyQuotaMinutes) }
+
                     Column(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -714,20 +947,21 @@ fun SettingsDrawer(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(app.label, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            Text(appItem.label, fontSize = 14.sp, modifier = Modifier.weight(1f))
                             Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                AppTier.entries.forEach { tier ->
-                                    val selected = app.tier == tier
+                                for (tierOption in AppTier.values()) {
+                                    val selected = currentTier == tierOption
                                     Text(
-                                        text = tier.name.first().toString(),
+                                        text = tierOption.name.first().toString(),
                                         fontSize = 12.sp,
-                                        color = if (selected) Color.Black else Color.Gray,
+                                                                                color = if (selected) Color.Black else Color.Gray,
                                         modifier = Modifier
                                             .background(if (selected) Color.White else Color.Transparent)
                                             .border(1.dp, Color.DarkGray)
                                             .clickable {
-                                                app.tier = tier
-                                                prefs.edit().putString("tier_${app.packageName}", tier.name).apply()
+                                                currentTier = tierOption
+                                                appItem.tier = tierOption
+                                                prefs.edit().putString("tier_${appItem.packageName}", tierOption.name).apply()
                                             }
                                             .padding(horizontal = 8.dp, vertical = 4.dp)
                                     )
@@ -735,21 +969,21 @@ fun SettingsDrawer(
                             }
                         }
 
-                        AnimatedVisibility(visible = app.tier == AppTier.RED) {
+                        AnimatedVisibility(visible = currentTier == AppTier.RED) {
                             Column(modifier = Modifier.padding(top = 8.dp)) {
                                 Text(
-                                    text = "Daily Quota: ${if (app.dailyQuotaMinutes == 0) "Off" else "${app.dailyQuotaMinutes}m"}",
+                                    text = "Daily Quota: ${if (currentQuota == 0) "Off" else "${currentQuota}m"}",
                                     fontSize = 11.sp,
                                     color = Color.Gray
                                 )
                                 Slider(
-                                    value = app.dailyQuotaMinutes.toFloat(),
-                                    onValueChange = {
-                                        app.dailyQuotaMinutes = it.toInt()
-                                        prefs.edit().putInt("quota_${app.packageName}", it.toInt()).apply()
+                                    value = currentQuota.toFloat(),
+                                    onValueChange = { newQ ->
+                                        currentQuota = newQ.toInt()
+                                        appItem.dailyQuotaMinutes = newQ.toInt()
+                                        prefs.edit().putInt("quota_${appItem.packageName}", newQ.toInt()).apply()
                                     },
-                                    valueRange = 0f..120f,
-                                    steps = 23
+                                    valueRange = 0f..120f
                                 )
                             }
                         }
@@ -760,15 +994,11 @@ fun SettingsDrawer(
     }
 }
 
-fun handleAppClick(
-    app: AppItem,
-    context: Context,
-    onRequirePrompt: (AppItem) -> Unit
-) {
-    when (app.tier) {
-        AppTier.GREEN -> launchPackage(context, app.packageName)
-        AppTier.YELLOW, AppTier.RED -> onRequirePrompt(app)
+fun bringLauncherToFront(context: Context) {
+    val homeIntent = Intent(context, MainActivity::class.java).apply {
+        flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
     }
+    context.startActivity(homeIntent)
 }
 
 fun launchPackage(context: Context, packageName: String) {
@@ -789,6 +1019,23 @@ fun hasUsageStatsPermission(context: Context): Boolean {
     return mode == AppOpsManager.MODE_ALLOWED
 }
 
+fun getCurrentForegroundPackage(context: Context): String? {
+    if (!hasUsageStatsPermission(context)) return null
+    val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val end = System.currentTimeMillis()
+    val start = end - 10000L
+    val events = usm.queryEvents(start, end)
+    val event = UsageEvents.Event()
+    var lastPkg: String? = null
+    while (events.hasNextEvent()) {
+        events.getNextEvent(event)
+        if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) {
+            lastPkg = event.packageName
+        }
+    }
+    return lastPkg
+}
+
 fun getTodayUsageMinutes(context: Context): Map<String, Int> {
     if (!hasUsageStatsPermission(context)) return emptyMap()
     val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
@@ -800,7 +1047,7 @@ fun getTodayUsageMinutes(context: Context): Map<String, Int> {
     val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, calendar.timeInMillis, System.currentTimeMillis()) ?: return emptyMap()
     val resultMap = mutableMapOf<String, Int>()
     for (stat in stats) {
-        resultMap[stat.packageName] = (stat.totalTimeInForeground / 60000).toInt()
+        resultMap[stat.packageName] = (stat.totalTimeInForeground / 60000L).toInt()
     }
     return resultMap
 }
@@ -809,11 +1056,13 @@ fun getPast7DayAverageMinutes(context: Context): Int {
     if (!hasUsageStatsPermission(context)) return 0
     val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
     val end = System.currentTimeMillis()
-    val start = end - (7L * 24 * 60 * 60 * 1000)
+    val start = end - (7L * 24L * 60L * 60L * 1000L)
     val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, start, end) ?: return 0
     var totalMinutes = 0
     for (stat in stats) {
-        totalMinutes += (stat.totalTimeInForeground / 60000).toInt()
+        totalMinutes += (stat.totalTimeInForeground / 60000L).toInt()
     }
     return totalMinutes / 7
 }
+
+                
