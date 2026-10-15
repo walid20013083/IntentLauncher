@@ -711,7 +711,7 @@ fun SettingsDrawer(
                                 Text(
                                     text = "Daily Quota: ${if (currentQuota == 0) "Off" else "${currentQuota}m"}",
                                     fontSize = 11.sp,
-                                    color = androidx.compose.ui.graphics.Color.Gray
+                                    color = Color.Gray
                                 )
                                 Slider(
                                     value = currentQuota.toFloat(),
