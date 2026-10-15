@@ -676,7 +676,7 @@ fun SettingsDrawer(
             if (settingsUnlocked) {
                 items(apps, key = { item: AppItem -> "setting_${item.packageName}" }) { appItem: AppItem ->
                     var currentTier by remember { mutableStateOf(appItem.tier) }
-                    var currentQuota by remember { mutableStateOf(appItem.dailyQuotaMinutes) }
+                    var quotaInputText by remember { mutableStateOf(if (appItem.dailyQuotaMinutes == 0) "" else appItem.dailyQuotaMinutes.toString()) }
                     Column(
                         modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF222222)).padding(10.dp)
                     ) {
@@ -708,19 +708,17 @@ fun SettingsDrawer(
                         }
                         AnimatedVisibility(visible = currentTier == AppTier.RED) {
                             Column(modifier = Modifier.padding(top = 8.dp)) {
-                                Text(
-                                    text = "Daily Quota: ${if (currentQuota == 0) "Off" else "${currentQuota}m"}",
-                                    fontSize = 11.sp,
-                                    color = Color.Gray
-                                )
-                                Slider(
-                                    value = currentQuota.toFloat(),
-                                    onValueChange = { newQ: Float ->
-                                        currentQuota = newQ.toInt()
-                                        appItem.dailyQuotaMinutes = newQ.toInt()
-                                        prefs.edit().putInt("quota_${appItem.packageName}", newQ.toInt()).apply()
+                                OutlinedTextField(
+                                    value = quotaInputText,
+                                    onValueChange = { s ->
+                                        quotaInputText = s
+                                        val parsed = s.toIntOrNull() ?: 0
+                                        appItem.dailyQuotaMinutes = parsed
+                                        prefs.edit().putInt("quota_${appItem.packageName}", parsed).apply()
                                     },
-                                    valueRange = 0f..120f
+                                    label = { Text("Daily Quota Minutes (0 = Off)", fontSize = 11.sp) },
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth()
                                 )
                             }
                         }
