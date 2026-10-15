@@ -714,7 +714,7 @@ fun SettingsDrawer(
                                     fontSize = 11.sp,
                                     color = Color.Gray
                                 )
-                                Slider(
+                             androidx.compose.material3.Slider(
                                     value = currentQuota.toFloat(),
                                     onValueChange = { newQ: Float ->
                                         currentQuota = newQ.toInt()
