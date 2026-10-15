@@ -709,12 +709,12 @@ fun SettingsDrawer(
                         }
                         AnimatedVisibility(visible = currentTier == AppTier.RED) {
                             Column(modifier = Modifier.padding(top = 8.dp)) {
-                                Text(
+                                                                Text(
                                     text = "Daily Quota: ${if (currentQuota == 0) "Off" else "${currentQuota}m"}",
                                     fontSize = 11.sp,
-                                    color = Color.Gray
+                                    color = androidx.compose.ui.graphics.Color.Gray
                                 )
-                             androidx.compose.material3.Slider(
+                                Slider(
                                     value = currentQuota.toFloat(),
                                     onValueChange = { newQ: Float ->
                                         currentQuota = newQ.toInt()
@@ -723,6 +723,7 @@ fun SettingsDrawer(
                                     },
                                     valueRange = 0f..120f
                                 )
+
                             }
                         }
                     }
