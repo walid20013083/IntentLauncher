@@ -328,4 +328,182 @@ fun AppRow(app: AppItem, strings: Strings, onClick: () -> Unit) {
     Column(modifier = Modifier.fillMaxWidth().clickable(enabled = !inCooldown && !quotaExceeded) { onClick() }.padding(vertical = 6.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween, modifier = Modifier.fillMaxWidth()) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                Box(modif
+                Box(modifier(modifier = Modifier.size(8.dp).background(tierColor))
+                Spacer(modifier = Modifier.width(12.dp))
+                Text(text = app.label, color = if (inCooldown || quotaExceeded) Color.DarkGray else Color.White, fontSize = 16.sp)
+            }
+            if (app.tier == AppTier.RED && app.dailyQuotaMinutes > 0) Text(text = "${app.usedMinutesToday}/${app.dailyQuotaMinutes}m", fontSize = 12.sp, color = Color.Gray)
+        }
+        if (inCooldown) {
+            val remSec = ((app.cooldownUntilMillis - now) / 1000L).coerceAtLeast(1L)
+            Text(text = "${strings.inCooldown} ${remSec / 60}m ${remSec % 60}s", fontSize = 11.sp, color = Color(0xFFE57373), modifier = Modifier.padding(start = 20.dp, top = 2.dp))
+        } else if (quotaExceeded) {
+            Text(text = strings.quotaReached, fontSize = 11.sp, color = Color(0xFFE57373), modifier = Modifier.padding(start = 20.dp, top = 2.dp))
+        }
+    }
+}
+
+@Composable
+fun IntentionAndTimerDialog(app: AppItem, strings: Strings, delaySeconds: Int, onDismiss: () -> Unit, onConfirm: (Int, String) -> Unit) {
+    var remainingDelay by remember { mutableStateOf(delaySeconds) }
+    var intentionText by remember { mutableStateOf("") }
+    var durationSlider by remember { mutableStateOf(if (app.tier == AppTier.RED) 10f else 15f) }
+    val isValidIntention = remember(intentionText) { val c = intentionText.trim(); c.length >= 6 && c.toSet().size >= 3 }
+    LaunchedEffect(Unit) { while (remainingDelay > 0) { delay(1000L); remainingDelay -= 1 } }
+    Dialog(onDismissRequest = onDismiss) {
+        Box(modifier = Modifier.fillMaxWidth().background(Color(0xFF121212)).border(1.dp, Color(0xFF333333)).padding(24.dp)) {
+            Column(modifier = Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+                Text(text = app.label, style = MaterialTheme.typography.titleLarge)
+                if (remainingDelay > 0) Text(text = "${strings.preSessionDelayText} ${remainingDelay}s...", fontSize = 14.sp, color = Color.Gray) else {
+                    OutlinedTextField(value = intentionText, onValueChange = { v: String -> intentionText = v }, label = { Text(strings.intentionPrompt, fontSize = 12.sp) }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                    if (!isValidIntention) Text(text = strings.minCharsWarning, fontSize = 11.sp, color = Color(0xFFE57373))
+                    Text(text = "${strings.selectDuration} ${durationSlider.toInt()}m", fontSize = 14.sp)
+                    Slider(value = durationSlider, onValueChange = { v: Float -> durationSlider = v }, valueRange = 1f..(if (app.tier == AppTier.RED) 30f else 60f))
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextButton(onClick = onDismiss) { Text(strings.cancel, color = Color.Gray) }
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Button(enabled = isValidIntention, onClick = { onConfirm(durationSlider.toInt(), intentionText.trim()) }, colors = ButtonDefaults.buttonColors(containerColor = Color.White, contentColor = Color.Black)) { Text(strings.startSession) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+fun SettingsDrawer(
+    strings: Strings, apps: List<AppItem>, prefs: SharedPreferences, hasPermission: Boolean,
+    onToggleLanguage: () -> Unit, preSessionDelaySec: Int, onUpdateDelay: (Int) -> Unit,
+    yellowCooldownMin: Int, onUpdateYellowCooldown: (Int) -> Unit, redCooldownMin: Int, onUpdateRedCooldown: (Int) -> Unit,
+    focusModeEnabled: Boolean, onToggleFocus: (Boolean) -> Unit, widgetsEnabled: Boolean, onToggleWidgets: (Boolean) -> Unit, context: Context
+) {
+    var settingsUnlocked by remember { mutableStateOf(false) }
+    var gateCountdown by remember { mutableStateOf(0) }
+    LaunchedEffect(gateCountdown) { if (gateCountdown > 0) { delay(1000L); gateCountdown -= 1; if (gateCountdown == 0) settingsUnlocked = true } }
+    val baselineDailyAvg = remember(hasPermission) { getPast7DayAverageMinutes(context) }
+    var todayTotal = 0; for (app in apps) { todayTotal += app.usedMinutesToday }
+
+    ModalDrawerSheet(drawerContainerColor = Color(0xFF0F0F0F), drawerContentColor = Color.White, modifier = Modifier.fillMaxWidth(0.88f)) {
+        LazyColumn(modifier = Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+            item {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(strings.settingsTitle, style = MaterialTheme.typography.titleLarge)
+                    TextButton(onClick = onToggleLanguage) { Text(strings.languageToggle, color = Color.White, fontSize = 12.sp) }
+                }
+                HorizontalDivider(color = Color(0xFF262626))
+            }
+            if (!hasPermission) {
+                item {
+                    Button(onClick = { context.startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS)) }, colors = ButtonDefaults.buttonColors(containerColor = Color(0xFFE57373), contentColor = Color.Black), modifier = Modifier.fillMaxWidth()) {
+                        Text(strings.grantPermission, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                    }
+                }
+            }
+            item {
+                Column(modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF262626)).padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text(strings.endOfDayReport, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                    Text("${strings.beforeAfterComparison} ${baselineDailyAvg}m -> ${todayTotal}m", fontSize = 13.sp, color = Color.LightGray)
+                    val delta = baselineDailyAvg - todayTotal
+                    Text(if (delta >= 0) "-${delta}m saved today" else "+${-delta}m over average", fontSize = 12.sp, color = if (delta >= 0) Color(0xFF81C784) else Color(0xFFE57373))
+                }
+            }
+            item {
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(strings.focusMode, fontSize = 13.sp); Switch(checked = focusModeEnabled, onCheckedChange = onToggleFocus)
+                }
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                    Text(strings.enableWidgets, fontSize = 13.sp); Switch(checked = widgetsEnabled, onCheckedChange = onToggleWidgets)
+                }
+            }
+            item {
+                if (!settingsUnlocked) {
+                    Button(onClick = { if (gateCountdown == 0) gateCountdown = 5 }, modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Color(0xFF222222), contentColor = Color.White)) {
+                        Text(if (gateCountdown > 0) "${strings.gatePrompt} (${gateCountdown}s)" else strings.unlockSettings)
+                    }
+                } else {
+                    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Text("${strings.delaySetting} ${preSessionDelaySec}s", fontSize = 13.sp)
+                        Slider(value = preSessionDelaySec.toFloat(), onValueChange = { v: Float -> onUpdateDelay(v.toInt()) }, valueRange = 3f..15f)
+                        Text("${strings.yellowCooldownSetting} ${yellowCooldownMin}m", fontSize = 13.sp)
+                        Slider(value = yellowCooldownMin.toFloat(), onValueChange = { v: Float -> onUpdateYellowCooldown(v.toInt()) }, valueRange = 1f..30f)
+                        Text("${strings.redCooldownSetting} ${redCooldownMin}m", fontSize = 13.sp)
+                        Slider(value = redCooldownMin.toFloat(), onValueChange = { v: Float -> onUpdateRedCooldown(v.toInt()) }, valueRange = 5f..60f)
+                    }
+                }
+            }
+            if (settingsUnlocked) {
+                items(apps, key = { item: AppItem -> "setting_${item.packageName}" }) { appItem: AppItem ->
+                    var currentTier by remember { mutableStateOf(appItem.tier) }
+                    var currentQuota by remember { mutableStateOf(appItem.dailyQuotaMinutes) }
+                    Column(modifier = Modifier.fillMaxWidth().border(1.dp, Color(0xFF222222)).padding(10.dp)) {
+                        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+                            Text(appItem.label, fontSize = 14.sp, modifier = Modifier.weight(1f))
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                for (tierOption in AppTier.values()) {
+                                    val selected = currentTier == tierOption
+                                    Text(
+                                        text = tierOption.name.first().toString(), fontSize = 12.sp, color = if (selected) Color.Black else Color.Gray,
+                                        modifier = Modifier.background(if (selected) Color.White else Color.Transparent).border(1.dp, Color.DarkGray)
+                                            .clickable { currentTier = tierOption; appItem.tier = tierOption; prefs.edit().putString("tier_${appItem.packageName}", tierOption.name).apply() }.padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            }
+                        }
+                        AnimatedVisibility(visible = currentTier == AppTier.RED) {
+                            Column(modifier = Modifier.padding(top = 8.dp)) {
+                                Text(text = "Daily Quota: ${if (currentQuota == 0) "Off" else "${currentQuota}m"}", fontSize = 11.sp, color = Color.Gray)
+                                Slider(value = currentQuota.toFloat(), onValueChange = { newQ: Float -> currentQuota = newQ.toInt(); appItem.dailyQuotaMinutes = newQ.toInt(); prefs.edit().putInt("quota_${appItem.packageName}", newQ.toInt()).apply() }, valueRange = 0f..120f)
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+fun bringLauncherToFront(context: Context) {
+    val homeIntent = Intent(context, MainActivity::class.java).apply { flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP }
+    context.startActivity(homeIntent)
+}
+
+fun launchPackage(context: Context, packageName: String) {
+    val launchIntent = context.packageManager.getLaunchIntentForPackage(packageName)
+    if (launchIntent != null) { launchIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_EXCLUDE_FROM_RECENTS); context.startActivity(launchIntent) }
+}
+
+fun hasUsageStatsPermission(context: Context): Boolean {
+    val appOps = context.getSystemService(Context.APP_OPS_SERVICE) as AppOpsManager
+    return appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), context.packageName) == AppOpsManager.MODE_ALLOWED
+}
+
+fun getCurrentForegroundPackage(context: Context): String? {
+    if (!hasUsageStatsPermission(context)) return null
+    val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val end = System.currentTimeMillis()
+    val events = usm.queryEvents(end - 10000L, end)
+    val event = UsageEvents.Event()
+    var lastPkg: String? = null
+    while (events.hasNextEvent()) { events.getNextEvent(event); if (event.eventType == UsageEvents.Event.ACTIVITY_RESUMED) lastPkg = event.packageName }
+    return lastPkg
+}
+
+fun getTodayUsageMinutes(context: Context): Map<String, Int> {
+    if (!hasUsageStatsPermission(context)) return emptyMap()
+    val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val cal = Calendar.getInstance().apply { set(Calendar.HOUR_OF_DAY, 0); set(Calendar.MINUTE, 0); set(Calendar.SECOND, 0) }
+    val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, cal.timeInMillis, System.currentTimeMillis()) ?: return emptyMap()
+    val resultMap = mutableMapOf<String, Int>()
+    for (stat in stats) { resultMap[stat.packageName] = (stat.totalTimeInForeground / 60000L).toInt() }
+    return resultMap
+}
+
+fun getPast7DayAverageMinutes(context: Context): Int {
+    if (!hasUsageStatsPermission(context)) return 0
+    val usm = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    val end = System.currentTimeMillis()
+    val stats = usm.queryUsageStats(UsageStatsManager.INTERVAL_DAILY, end - (7L * 24L * 60L * 60L * 1000L), end) ?: return 0
+    var totalMinutes = 0
+    for (stat in stats) { totalMinutes += (stat.totalTimeInForeground / 60000L).toInt() }
+    return totalMinutes / 7
+}
