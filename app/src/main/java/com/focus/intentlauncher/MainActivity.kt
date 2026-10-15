@@ -284,7 +284,7 @@ fun LauncherScreen(context: Context, prefs: SharedPreferences, appWidgetManager:
                     Text(text = currentTimeString, style = MaterialTheme.typography.titleLarge, fontSize = 34.sp)
                     if (activeSessionPkg != null && sessionRemainingSeconds > 0) {
                         Text(
-                            text = "$activeSessionLabel: ${sessionRemainingSeconds / 60}m ${sessionRemainingSeconds % 60}s",
+                            text = "$activeSessionLabel: ${sessionRemainingSeconds / 60}m${sessionRemainingSeconds % 60}s",
                             fontSize = 12.sp,
                             color = Color(0xFFFF6B6B),
                             modifier = Modifier.border(1.dp, Color(0xFFFF6B6B)).padding(horizontal = 8.dp, vertical = 4.dp)
@@ -318,99 +318,7 @@ fun LauncherScreen(context: Context, prefs: SharedPreferences, appWidgetManager:
                     modifier = Modifier.fillMaxWidth(),
                     colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color(0xFF555555), unfocusedBorderColor = Color(0xFF222222), cursorColor = Color.White)
                 )
-                if (thoughts.isNotEmpty()) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    LazyColumn(
-                        modifier = Modifier.fillMaxWidth().heightIn(max = 120.dp).border(1.dp, Color(0xFF1F1F1F)).padding(8.dp),
-                        verticalArrangement = Arrangement.spacedBy(6.dp)
-                    ) {
-                        items(thoughts) { item: String ->
-                            Text(
-                                text = "• $item",
-                                fontSize = 13.sp,
-                                color = Color(0xFFAAAAAA),
-                                modifier = Modifier.fillMaxWidth().clickable {
-                                    thoughts.remove(item)
-                                    saveThoughts()
-                                }.padding(vertical = 2.dp)
-                            )
-                        }
-                    }
-                }
-                Spacer(modifier = Modifier.height(16.dp))
-                val filteredApps = remember(searchQuery, apps.size) {
-                    if (searchQuery.isBlank()) emptyList() else {
-                        val q = searchQuery.trim()
-                        val starts = mutableListOf<AppItem>()
-                        val contains = mutableListOf<AppItem>()
-                        for (app in apps) {
-                            if (app.label.startsWith(q, ignoreCase = true)) starts.add(app)
-                            else if (app.label.contains(q, ignoreCase = true)) contains.add(app)
-                        }
-                        starts + contains
-                    }
-                }
-                fun triggerApp(target: AppItem) {
-                    val now = System.currentTimeMillis()
-                    val inCooldown = (target.tier == AppTier.RED || target.tier == AppTier.YELLOW) && now < target.cooldownUntilMillis
-                    val quotaExceeded = target.tier == AppTier.RED && target.dailyQuotaMinutes > 0 && target.usedMinutesToday >= target.dailyQuotaMinutes
-                    if (!inCooldown && !quotaExceeded) {
-                        focusManager.clearFocus()
-                        searchQuery = ""
-                        if (target.tier == AppTier.GREEN) launchPackage(context, target.packageName) else selectedAppForPrompt = target
-                    }
-                }
-                OutlinedTextField(
-                    value = searchQuery,
-                    onValueChange = { q: String ->
-                        searchQuery = q
-                        val clean = q.trim()
-                        if (clean.isNotEmpty()) {
-                            val matches = mutableListOf<AppItem>()
-                            for (a in apps) {
-                                if (a.label.contains(clean, ignoreCase = true)) matches.add(a)
-                            }
-                            if (matches.size == 1) triggerApp(matches[0])
-                        }
-                    },
-                    placeholder = { Text(strings.searchPlaceholder, fontSize = 14.sp, color = Color.Gray) },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
-                    keyboardActions = KeyboardActions(onSearch = {
-                        if (filteredApps.isNotEmpty()) triggerApp(filteredApps[0])
-                    }),
-                    modifier = Modifier.fillMaxWidth(),
-                    colors = OutlinedTextFieldDefaults.colors(focusedBorderColor = Color.White, unfocusedBorderColor = Color(0xFF333333), cursorColor = Color.White)
-                )
-                Spacer(modifier = Modifier.height(18.dp))
-                LazyColumn(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    items(filteredApps, key = { item: AppItem -> item.packageName }) { appItem: AppItem ->
-                        AppRow(app = appItem, strings = strings, onClick = { triggerApp(appItem) })
-                    }
-                }
-            }
-            if (selectedAppForPrompt != null) {
-                IntentionAndTimerDialog(
-                    app = selectedAppForPrompt!!,
-                    strings = strings,                    delaySeconds = preSessionDelaySec,
-                    onDismiss = { selectedAppForPrompt = null },
-                    onConfirm = { mins: Int, _: String ->
-                        val targetApp = selectedAppForPrompt!!
-                        selectedAppForPrompt = null
-                        activeSessionPkg = targetApp.packageName
-                        activeSessionLabel = targetApp.label
-                        activeSessionTier = targetApp.tier
-                        sessionEndTimeMillis = System.currentTimeMillis() + (mins * 60 * 1000L)
-                        sessionRemainingSeconds = mins * 60
-                        userLeftLauncher = false
-                        launchPackage(context, targetApp.packageName)
-                    }
-                )
-            }
-        }
-    }
-}
-@Composable
+                if (thoughts.isNotEmpty
 fun AppRow(app: AppItem, strings: Strings, onClick: () -> Unit) {
     val now = System.currentTimeMillis()
     val inCooldown = (app.tier == AppTier.RED || app.tier == AppTier.YELLOW) && now < app.cooldownUntilMillis
@@ -541,7 +449,6 @@ fun IntentionAndTimerDialog(app: AppItem, strings: Strings, delaySeconds: Int, o
         }
     }
 }
-
 @Composable
 fun SettingsDrawer(
     strings: Strings,
@@ -709,7 +616,7 @@ fun SettingsDrawer(
                         }
                         AnimatedVisibility(visible = currentTier == AppTier.RED) {
                             Column(modifier = Modifier.padding(top = 8.dp)) {
-                                                                Text(
+                                Text(
                                     text = "Daily Quota: ${if (currentQuota == 0) "Off" else "${currentQuota}m"}",
                                     fontSize = 11.sp,
                                     color = androidx.compose.ui.graphics.Color.Gray
@@ -723,7 +630,6 @@ fun SettingsDrawer(
                                     },
                                     valueRange = 0f..120f
                                 )
-
                             }
                         }
                     }
@@ -796,5 +702,3 @@ fun getPast7DayAverageMinutes(context: Context): Int {
     }
     return totalMinutes / 7
 }
-
-    
